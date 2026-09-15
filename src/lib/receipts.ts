@@ -4,14 +4,16 @@ import { commitPreimage, evidencePreimage, newId, newNonce, sealPreimage, sha256
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
   committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
-  outcome: string | null; evidence: unknown; evidence_hash: string | null; revealed_at: string | null;
+  outcome: string | null; evidence: unknown; evidence_raw: string | null; evidence_hash: string | null; revealed_at: string | null;
   seq: number | null; prev_seal: string | null; seal_hash: string | null; seal_sig: string | null;
 };
 
 const SELECT = `SELECT r.*, a.name AS agent_name FROM receipts r JOIN agents a ON a.id = r.agent_id`;
 const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : d == null ? null : new Date(d as string).toISOString());
 function norm(r: Record<string, unknown>): Receipt {
-  return { ...(r as Receipt), committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
+  const raw = (r.evidence as string | null) ?? null;
+  let parsed: unknown = null; if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
+  return { ...(r as Receipt), evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
 }
 
 export const MAX_TEXT = 600;
@@ -46,7 +48,8 @@ export async function getReceipt(id: string): Promise<Receipt | null> {
 /** Seal a terminal state into the agent's hash chain. Retries once on a seq race. */
 export async function seal(r: Receipt, status: "kept" | "failed" | "withdrawn" | "expired", outcome: string | null, evidence: unknown): Promise<Receipt | null> {
   const revealed_at = new Date().toISOString();
-  const evidence_hash = sha256(evidencePreimage(outcome, evidence));
+  const evidence_raw = evidence == null ? null : JSON.stringify(evidence);
+  const evidence_hash = sha256(evidencePreimage(outcome, evidence_raw));
   for (let attempt = 0; attempt < 2; attempt++) {
     const prev = await q<{ seal_hash: string; seq: string }>(
       `SELECT seal_hash, seq FROM receipts WHERE agent_id = $1 AND seal_hash IS NOT NULL ORDER BY seq DESC LIMIT 1`, [r.agent_id]);
@@ -58,7 +61,7 @@ export async function seal(r: Receipt, status: "kept" | "failed" | "withdrawn" |
       const rows = await q(
         `UPDATE receipts SET status=$2, outcome=$3, evidence=$4, evidence_hash=$5, revealed_at=$6, seq=$7, prev_seal=$8, seal_hash=$9, seal_sig=$10
          WHERE id=$1 AND status='open' RETURNING id`,
-        [r.id, status, outcome, evidence == null ? null : JSON.stringify(evidence), evidence_hash, revealed_at, seq, prev_seal, seal_hash, seal_sig]);
+        [r.id, status, outcome, evidence_raw, evidence_hash, revealed_at, seq, prev_seal, seal_hash, seal_sig]);
       if (!rows[0]) return getReceipt(r.id); // already sealed by someone else
       return getReceipt(r.id);
     } catch (e) {

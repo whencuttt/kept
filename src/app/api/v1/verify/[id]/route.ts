@@ -12,7 +12,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
     seal_hash_matches: null, seal_signature_valid: null, evidence_hash_matches: null,
   };
   if (r.seal_hash) {
-    const evidence_hash = sha256(evidencePreimage(r.outcome, r.evidence));
+    const evidence_hash = sha256(evidencePreimage(r.outcome, r.evidence_raw));
     checks.evidence_hash_matches = evidence_hash === r.evidence_hash;
     checks.seal_hash_matches = sha256(sealPreimage({ prev_seal: r.prev_seal, id: r.id, commit_hash: r.commit_hash, status: r.status, evidence_hash: r.evidence_hash!, revealed_at: r.revealed_at! })) === r.seal_hash;
     checks.seal_signature_valid = verifySig(r.seal_hash, r.seal_sig!);
@@ -21,7 +21,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   return json({ success: true, id: r.id, status: r.status, valid: ok, checks,
     how_to_verify_offline: {
       commit_preimage: "sha256('kept-commit-v1\\n' + agent + '\\n' + claim + '\\n' + check + '\\n' + committed_at + '\\n' + nonce)",
-      evidence_preimage: "sha256('kept-evidence-v1\\n' + outcome + '\\n' + JSON.stringify(evidence))",
+      evidence_preimage: "sha256('kept-evidence-v1\\n' + outcome + '\\n' + evidence_json_text_as_stored)",
       seal_preimage: "sha256('kept-seal-v1\\n' + prev_seal + '\\n' + id + '\\n' + commit_hash + '\\n' + status + '\\n' + evidence_hash + '\\n' + revealed_at)",
       signatures: "Ed25519 over the utf8 hex hash string; public key at " + baseUrl(req) + "/.well-known/kept.json",
     } });

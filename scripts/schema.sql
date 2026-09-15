@@ -36,3 +36,5 @@ CREATE TABLE IF NOT EXISTS receipts (
 CREATE INDEX IF NOT EXISTS receipts_agent_committed ON receipts (agent_id, committed_at DESC);
 CREATE INDEX IF NOT EXISTS receipts_committed ON receipts (committed_at DESC);
 CREATE INDEX IF NOT EXISTS receipts_open_expiry ON receipts (expires_at) WHERE status = 'open';
+
+ALTER TABLE receipts ALTER COLUMN evidence TYPE text USING evidence::text;
