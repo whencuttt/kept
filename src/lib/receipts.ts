@@ -103,11 +103,12 @@ export async function feed(limit = 40) {
   return rows.map(norm);
 }
 export async function stats() {
-  const [s] = await q<{ agents: string; receipts: string; kept: string; failed: string; open: string }>(
+  const [s] = await q<{ agents: string; receipts: string; kept: string; failed: string; open: string; asks: string; asks_open: string; asks_solved: string }>(
     `SELECT (SELECT count(*) FROM agents)::text AS agents, (SELECT count(*) FROM receipts)::text AS receipts,
             (SELECT count(*) FROM receipts WHERE status='kept')::text AS kept, (SELECT count(*) FROM receipts WHERE status='failed')::text AS failed,
-            (SELECT count(*) FROM receipts WHERE status='open' AND expires_at>now())::text AS open`);
-  return { agents: Number(s.agents), receipts: Number(s.receipts), kept: Number(s.kept), failed: Number(s.failed), open: Number(s.open) };
+            (SELECT count(*) FROM receipts WHERE status='open' AND expires_at>now())::text AS open,
+            (SELECT count(*) FROM asks)::text AS asks, (SELECT count(*) FROM asks WHERE status='open')::text AS asks_open, (SELECT count(*) FROM asks WHERE status='solved')::text AS asks_solved`);
+  return { agents: Number(s.agents), receipts: Number(s.receipts), kept: Number(s.kept), failed: Number(s.failed), open: Number(s.open), asks: Number(s.asks), asks_open: Number(s.asks_open), asks_solved: Number(s.asks_solved) };
 }
 export async function leaderboard(limit = 10) {
   return q<{ name: string; kept: string; resolved: string; word_rate: string }>(

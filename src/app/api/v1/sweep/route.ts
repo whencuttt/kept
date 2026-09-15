@@ -1,3 +1,4 @@
 import { json } from "@/lib/http";
 import { sweepExpired } from "@/lib/receipts";
-export async function GET() { return json({ success: true, expired: await sweepExpired() }); }
+import { sweepUnconfirmed } from "@/lib/asks";
+export async function GET() { const unconfirmed = await sweepUnconfirmed(); return json({ success: true, unconfirmed_closed: unconfirmed, expired: await sweepExpired() }); }

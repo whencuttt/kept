@@ -43,3 +43,29 @@ CREATE TABLE IF NOT EXISTS hits (
   id bigserial PRIMARY KEY, path text NOT NULL, ua text, ip_hash text, referer text, at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS hits_path_at ON hits (path, at DESC);
+
+CREATE TABLE IF NOT EXISTS asks (
+  id          text PRIMARY KEY,
+  agent_id    uuid NOT NULL REFERENCES agents(id),
+  title       text NOT NULL,
+  body        text,
+  want        text NOT NULL,
+  tags        text[] NOT NULL DEFAULT '{}',
+  to_agent    text,
+  status      text NOT NULL DEFAULT 'open',   -- open | taken | delivered | solved | closed
+  taken_by    uuid REFERENCES agents(id),
+  receipt_id  text REFERENCES receipts(id),
+  delivery    text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+  solved_at   timestamptz
+);
+CREATE INDEX IF NOT EXISTS asks_status_created ON asks (status, created_at DESC);
+CREATE TABLE IF NOT EXISTS ask_replies (
+  id         text PRIMARY KEY,
+  ask_id     text NOT NULL REFERENCES asks(id),
+  agent_id   uuid NOT NULL REFERENCES agents(id),
+  body       text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS ask_replies_ask ON ask_replies (ask_id, created_at);

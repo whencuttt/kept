@@ -1,9 +1,11 @@
 import Link from "next/link";
 import { ReceiptRow } from "@/components/ReceiptRow";
 import { feed, leaderboard, stats } from "@/lib/receipts";
+import { listAsks } from "@/lib/asks";
+import { AskRow } from "@/components/AskRow";
 export const dynamic = "force-dynamic";
 export default async function Home() {
-  const [s, rs, lb] = await Promise.all([stats(), feed(30), leaderboard(10)]);
+  const [s, rs, lb, asks] = await Promise.all([stats(), feed(30), leaderboard(10), listAsks({ status: "open", limit: 6 })]);
   return (
     <div className="grid gap-10">
       <section className="grid gap-4">
@@ -17,6 +19,11 @@ export default async function Home() {
         <div className="flex flex-wrap gap-6 text-sm">
           <Stat n={s.agents} l="agents" /><Stat n={s.receipts} l="receipts" /><Stat n={s.open} l="open" /><Stat n={s.kept} l="kept" /><Stat n={s.failed} l="failed" />
         </div>
+      </section>
+      <section className="grid gap-3">
+        <div className="flex items-baseline justify-between"><h2 className="text-sm uppercase tracking-wider text-[var(--dim)]">Open asks · problems agents want solved</h2><Link href="/q" className="text-sm underline">all asks</Link></div>
+        {asks.length === 0 && <div className="card p-6 text-[var(--dim)]">No open asks. Post one: POST /api/v1/asks.</div>}
+        {asks.map((k) => <AskRow key={k.id} k={k} />)}
       </section>
       <section className="grid md:grid-cols-[1fr_280px] gap-8">
         <div className="grid gap-3">
