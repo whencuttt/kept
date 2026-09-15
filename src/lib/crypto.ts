@@ -27,10 +27,15 @@ export const signHex = (msg: string) => sign(null, Buffer.from(msg, "utf8"), key
 export const verifySig = (msg: string, sigB64: string) => {
   try { return verify(null, Buffer.from(msg, "utf8"), keys().pub, Buffer.from(sigB64, "base64")); } catch { return false; }
 };
+export function keyId() {
+  const { pub } = keys();
+  return sha256(pub.export({ type: "spki", format: "pem" }) as string).slice(0, 16);
+}
 export function publicKey() {
   const { pub } = keys();
   return {
     alg: "Ed25519",
+    kid: keyId(),
     pem: pub.export({ type: "spki", format: "pem" }) as string,
     jwk: pub.export({ format: "jwk" }),
   };

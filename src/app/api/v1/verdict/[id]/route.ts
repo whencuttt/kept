@@ -1,4 +1,4 @@
-import { signHex, sha256 } from "@/lib/crypto";
+import { signHex, sha256, keyId } from "@/lib/crypto";
 import { baseUrl, err, json } from "@/lib/http";
 import { getReceipt } from "@/lib/receipts";
 /**
@@ -8,7 +8,8 @@ import { getReceipt } from "@/lib/receipts";
  *   fresh   true only when status is kept AND resolved within max_age seconds (default 86400)
  *   expires_at  hard expiry of THIS verdict (now + ttl, default 30s, max 300s). Gates must fail closed after it.
  *   aud, nonce  echoed and signed: a verdict for one action/request cannot be replayed for another.
- * sig = Ed25519 over sha256("kept-verdict-v2\n" + id + "\n" + status + "\n" + fresh + "\n" + issued_at + "\n" + expires_at + "\n" + aud + "\n" + nonce + "\n" + (seal_hash||""))
+ * sig = Ed25519 over sha256("kept-verdict-v2\n" + id + "\n" + status + "\n" + fresh + "\n" + issued_at + "\n" + expires_at + "\n" + aud + "\n" + nonce + "\n" + (seal_hash||"") + "\n" + kid)
+ * kid = first 16 hex of sha256(public key SPKI PEM). Gates must know the kid and fail closed on an unknown or rotated key.
  * Gate rule: verify sig with /.well-known/kept.json, require now < expires_at (allow small skew), require aud/nonce match, then act only if fresh.
  */
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -27,9 +28,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const fresh = r.status === "kept" && age_s !== null && age_s <= maxAge;
   // Human-readable downgrade label (umiXBT): a kept receipt past its validity window no longer implies current truth.
   const label = r.status === "kept" ? (fresh ? "verified" : "unverified pending reconciliation") : r.status === "open" ? "unresolved" : r.status;
-  const preimage = ["kept-verdict-v2", r.id, r.status, String(fresh), issued_at, expires_at, aud, nonce, r.seal_hash ?? ""].join("\n");
+  const kid = keyId();
+  const preimage = ["kept-verdict-v2", r.id, r.status, String(fresh), issued_at, expires_at, aud, nonce, r.seal_hash ?? "", kid].join("\n");
   const digest = sha256(preimage);
-  return json({ v: 2, id: r.id, agent: r.agent_name, status: r.status, fresh, label, owner: r.agent_name, valid_until: r.revealed_at ? new Date(new Date(r.revealed_at).getTime() + maxAge * 1000).toISOString() : null, age_s, max_age: maxAge, issued_at, expires_at, aud, nonce, seal_hash: r.seal_hash, digest, sig: signHex(digest),
+  return json({ v: 2, kid, id: r.id, agent: r.agent_name, status: r.status, fresh, label, owner: r.agent_name, valid_until: r.revealed_at ? new Date(new Date(r.revealed_at).getTime() + maxAge * 1000).toISOString() : null, age_s, max_age: maxAge, issued_at, expires_at, aud, nonce, seal_hash: r.seal_hash, digest, sig: signHex(digest),
     gate_rule: "verify sig; require now < expires_at (small skew ok); require aud and nonce equal what you sent; act only if fresh; fail closed on any doubt",
     public_key_url: `${baseUrl(req)}/.well-known/kept.json`, evidence_url: `${baseUrl(req)}/api/v1/receipts/${r.id}` });
 }
