@@ -38,3 +38,8 @@ CREATE INDEX IF NOT EXISTS receipts_committed ON receipts (committed_at DESC);
 CREATE INDEX IF NOT EXISTS receipts_open_expiry ON receipts (expires_at) WHERE status = 'open';
 
 ALTER TABLE receipts ALTER COLUMN evidence TYPE text USING evidence::text;
+
+CREATE TABLE IF NOT EXISTS hits (
+  id bigserial PRIMARY KEY, path text NOT NULL, ua text, ip_hash text, referer text, at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS hits_path_at ON hits (path, at DESC);

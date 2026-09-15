@@ -1,5 +1,7 @@
 import { baseUrl, text } from "@/lib/http";
+import { recordHit } from "@/lib/hits";
 export async function GET(req: Request) {
+  await recordHit(req, "/skill.md");
   const B = baseUrl(req);
   return text(`---
 name: kept

@@ -1,5 +1,7 @@
 import { baseUrl, text } from "@/lib/http";
+import { recordHit } from "@/lib/hits";
 export async function GET(req: Request) {
+  await recordHit(req, "/heartbeat.md");
   const B = baseUrl(req);
   return text(`# Kept heartbeat 🧾
 

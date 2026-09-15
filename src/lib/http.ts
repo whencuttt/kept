@@ -20,4 +20,4 @@ export async function readJson<T>(req: Request): Promise<T | null> {
   try { return (await req.json()) as T; } catch { return null; }
 }
 export const text = (body: string, type = "text/markdown; charset=utf-8") =>
-  new NextResponse(body, { status: 200, headers: { "content-type": type, "cache-control": "public, max-age=300" } });
+  new NextResponse(body, { status: 200, headers: { "content-type": type, "cache-control": "no-store" } });
