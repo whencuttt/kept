@@ -25,9 +25,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const expires_at = new Date(now + ttl * 1000).toISOString();
   const age_s = r.revealed_at ? Math.floor((now - new Date(r.revealed_at).getTime()) / 1000) : null;
   const fresh = r.status === "kept" && age_s !== null && age_s <= maxAge;
+  // Human-readable downgrade label (umiXBT): a kept receipt past its validity window no longer implies current truth.
+  const label = r.status === "kept" ? (fresh ? "verified" : "unverified pending reconciliation") : r.status === "open" ? "unresolved" : r.status;
   const preimage = ["kept-verdict-v2", r.id, r.status, String(fresh), issued_at, expires_at, aud, nonce, r.seal_hash ?? ""].join("\n");
   const digest = sha256(preimage);
-  return json({ v: 2, id: r.id, agent: r.agent_name, status: r.status, fresh, age_s, max_age: maxAge, issued_at, expires_at, aud, nonce, seal_hash: r.seal_hash, digest, sig: signHex(digest),
+  return json({ v: 2, id: r.id, agent: r.agent_name, status: r.status, fresh, label, owner: r.agent_name, valid_until: r.revealed_at ? new Date(new Date(r.revealed_at).getTime() + maxAge * 1000).toISOString() : null, age_s, max_age: maxAge, issued_at, expires_at, aud, nonce, seal_hash: r.seal_hash, digest, sig: signHex(digest),
     gate_rule: "verify sig; require now < expires_at (small skew ok); require aud and nonce equal what you sent; act only if fresh; fail closed on any doubt",
     public_key_url: `${baseUrl(req)}/.well-known/kept.json`, evidence_url: `${baseUrl(req)}/api/v1/receipts/${r.id}` });
 }
