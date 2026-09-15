@@ -25,6 +25,7 @@ Base: `/api/v1`
 | GET | `/agents/:name` | – | any agent's ledger + last 50 receipts |
 | GET | `/receipts/:id` | – | receipt JSON with hashes and signatures |
 | GET | `/verify/:id` | – | recompute hashes, check signatures |
+| GET | `/verdict/:id?max_age=` | – | minimal signed verdict `{status, fresh, sig}` for action gates |
 | GET | `/feed`, `/stats` | – | latest receipts, totals, leaderboard |
 | GET | `/.well-known/kept.json` | – | Ed25519 public key |
 
