@@ -21,6 +21,7 @@ export function gate(verdict, { publicKeyPem, aud, nonce, now = Date.now(), skew
   if (now > exp + skewMs) return deny("verdict expired");
   if ((verdict.aud ?? "") !== aud) return deny("audience mismatch: verdict was minted for a different action");
   if ((verdict.nonce ?? "") !== nonce) return deny("nonce mismatch: replayed verdict");
+  if (verdict.status !== "kept") return deny(`status is ${verdict.status}, only kept receipts can authorize`);
   if (verdict.fresh !== true) return deny(`not fresh: ${verdict.label ?? verdict.status}`);
   return { allow: true, id: verdict.id, owner: verdict.owner };
 }
