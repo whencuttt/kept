@@ -3,7 +3,7 @@
 //   node interp.mjs [--step sN] --relied-on tool=Bash,field=stdout --decision "..." --because "..."
 // The agent can lie in what it writes here. It cannot forge the output hashes: every value_hash is
 // copied from the runtime's own record of that step, and a field the runtime never saw is refused.
-import { appendChain, chainPath, interpPre, latestSession, readChain, sha256, withLock } from "./trace.mjs";
+import { appendChain, chainPath, interpPre, latestSession, readChain, sha256, uploadRecord, withLock } from "./trace.mjs";
 
 const a = process.argv.slice(2), get = (f) => { const i = a.indexOf(f); return i < 0 ? null : a[i + 1]; };
 const all = (f) => a.flatMap((v, i) => (v === f && a[i + 1] ? [a[i + 1]] : []));
@@ -32,7 +32,9 @@ function main() {
     });
     const interp = { relied_on, decision, because };
     const interp_hash = sha256(interpPre(link.link, interp));
-    appendChain(sid, { type: "interp", step_id: link.step_id, ts: new Date().toISOString(), link: link.link, interp, interp_hash });
+    const record = { type: "interp", step_id: link.step_id, ts: new Date().toISOString(), link: link.link, interp, interp_hash };
+    appendChain(sid, record);
+    uploadRecord(sid, record);
     console.log(`${link.step_id} interp_hash ${interp_hash}`);
   });
 }

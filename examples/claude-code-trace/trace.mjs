@@ -1,5 +1,6 @@
 // Shared primitives for the Kept trace convention (../trace-convention.md). Dependency-free Node.
 // The two preimages are the whole contract; test.mjs re-derives them from the spec text independently.
+import { spawn } from "node:child_process";
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -46,6 +47,28 @@ export const appendChain = (sid, rec) => { mkdirSync(traceDir(), { recursive: tr
 export function latestSession() {
   try { return readdirSync(traceDir()).filter((f) => f.endsWith(".jsonl")).map((f) => [f, statSync(join(traceDir(), f)).mtimeMs]).sort((a, b) => b[1] - a[1])[0]?.[0].replace(/\.jsonl$/, "") ?? null; } catch { return null; }
 }
+/** Optional Kept upload, read through HOME() so a test with KEPT_TRACE_HOME set stays offline.
+ *  {"kept_api_key":"kept_sk_...","base":"https://kept-ledger.vercel.app"} */
+export function keptConfig() {
+  try {
+    const c = JSON.parse(readFileSync(join(HOME(), "config.json"), "utf8"));
+    return c?.kept_api_key ? { key: c.kept_api_key, base: String(c.base || "https://kept-ledger.vercel.app").replace(/\/$/, "") } : null;
+  } catch { return null; }
+}
+const UPLOADER = `const a=JSON.parse(process.env.KEPT_UP);fetch(a.base+"/api/v1/trace",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+a.key},body:JSON.stringify(a.body),signal:AbortSignal.timeout(2000)}).catch(()=>{})`;
+/** Fire-and-forget: a detached, stdio-less child POSTs the record and the tool call never waits on it.
+ *  No config, no network, no Kept — the offline jsonl chain is unchanged either way. */
+export function uploadRecord(sid, rec) {
+  const cfg = keptConfig();
+  if (!cfg) return;
+  try {
+    spawn(process.execPath, ["-e", UPLOADER], {
+      detached: true, stdio: "ignore",
+      env: { ...process.env, KEPT_UP: JSON.stringify({ base: cfg.base, key: cfg.key, body: { ...rec, session_id: String(sid) } }) },
+    }).unref();
+  } catch { /* a failed upload is never a failed tool call */ }
+}
+
 /** Read-modify-write lock: parallel and background tool calls do overlap. */
 export function withLock(sid, fn) {
   const lock = chainPath(sid) + ".lock"; mkdirSync(traceDir(), { recursive: true });

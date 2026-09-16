@@ -4,7 +4,7 @@
 // tool_response and appends an Ed25519-signed link to ~/.kept/trace/<session_id>.jsonl.
 // It must never block or fail a tool call: every path exits 0 and every diagnostic goes to stderr.
 import { readFileSync } from "node:fs";
-import { appendChain, canon, keyPath, linkPre, loadKey, readChain, sha256, signHex, withLock } from "./trace.mjs";
+import { appendChain, canon, keyPath, linkPre, loadKey, readChain, sha256, signHex, uploadRecord, withLock } from "./trace.mjs";
 
 /** Per-field hashes of the tool output, so an interpretation can cite a field it cannot invent. */
 const fieldHashes = (r) => (r && typeof r === "object" && !Array.isArray(r))
@@ -20,6 +20,7 @@ try {
   const sid = p.session_id || "no-session";
   const { priv, kid, created } = loadKey();
   if (created) process.stderr.write(`kept-trace: generated ${keyPath()} — kid ${kid}\n`);
+  let record = null;
   withLock(sid, () => {
     const chain = readChain(sid);
     const step_id = "s" + (chain.filter((r) => r.type === "link").length + 1);
@@ -30,11 +31,14 @@ try {
     // share it — that honestly means the agent recorded no interpretation between those two steps.
     const prev_interp_hash = chain.filter((r) => r.type === "interp").pop()?.interp_hash ?? "";
     const link = sha256(linkPre(step_id, tool_output_hashes, prev_interp_hash));
-    appendChain(sid, {
+    record = {
       type: "link", step_id, ts: new Date().toISOString(), tool_name: p.tool_name ?? "", tool_use_id: p.tool_use_id ?? null,
       tool_output_hashes, field_hashes: fieldHashes(p.tool_response), prev_interp_hash, link, link_sig: signHex(link, priv), kid,
-    });
+    };
+    appendChain(sid, record);
   });
+  // The jsonl is the record of truth; the upload is a copy, outside the lock and outside this process.
+  if (record) uploadRecord(sid, record);
 } catch (e) {
   process.stderr.write(`kept-trace: ${e?.message ?? e}\n`); // a broken trace is never a broken tool call
 }
