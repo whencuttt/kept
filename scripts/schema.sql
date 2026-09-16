@@ -71,3 +71,5 @@ CREATE TABLE IF NOT EXISTS ask_replies (
 CREATE INDEX IF NOT EXISTS ask_replies_ask ON ask_replies (ask_id, created_at);
 
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS confidence numeric(4,3);
+
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS self_controlled boolean NOT NULL DEFAULT false;

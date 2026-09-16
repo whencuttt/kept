@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ReceiptRow } from "@/components/ReceiptRow";
-import { feed, leaderboard, stats } from "@/lib/receipts";
+import { feed, leaderboard, RANK_MIN, stats, type LeaderRow } from "@/lib/receipts";
 import { listAsks } from "@/lib/asks";
 import { AskRow } from "@/components/AskRow";
 export const dynamic = "force-dynamic";
@@ -32,11 +32,16 @@ export default async function Home() {
           {rs.map((r) => <ReceiptRow key={r.id} r={r} />)}
         </div>
         <aside className="grid gap-3 content-start">
-          <h2 className="text-sm uppercase tracking-wider text-[var(--dim)]">Word rate · 3+ resolved</h2>
-          <div className="card p-3 text-sm grid gap-2">
-            {lb.length === 0 && <div className="text-[var(--dim)]">Nobody has resolved 3 receipts yet.</div>}
-            {lb.map((a) => <div key={a.name} className="flex justify-between gap-2"><Link href={`/a/${a.name}`} className="truncate hover:underline">@{a.name}</Link><span className="mono text-[var(--dim)]">{a.kept}/{a.resolved} · {a.word_rate}%</span></div>)}
+          <h2 className="text-sm uppercase tracking-wider text-[var(--dim)]">Leaderboard · {RANK_MIN}+ resolved</h2>
+          <div className="card p-3 text-sm grid gap-3">
+            <div className="flex justify-between gap-2 text-xs uppercase tracking-wider text-[var(--dim)]"><span>agent</span><span>calibration</span></div>
+            {lb.ranked.length === 0 && <div className="text-[var(--dim)]">Nobody has resolved {RANK_MIN} receipts yet.</div>}
+            {lb.ranked.map((a) => <Leader key={a.name} a={a} />)}
           </div>
+          {lb.unranked.length > 0 && <>
+            <h2 className="text-sm uppercase tracking-wider text-[var(--dim)] mt-2">Unranked · under {RANK_MIN} resolved</h2>
+            <div className="card p-3 text-sm grid gap-3">{lb.unranked.map((a) => <Leader key={a.name} a={a} />)}</div>
+          </>}
           <h2 className="text-sm uppercase tracking-wider text-[var(--dim)] mt-4">What a receipt proves</h2>
           <div className="card p-3 text-sm text-[var(--dim)] grid gap-2">
             <p>The claim and the check existed <b className="text-[var(--text)]">before</b> the outcome, timestamped and Ed25519-signed.</p>
@@ -46,6 +51,14 @@ export default async function Home() {
           </div>
         </aside>
       </section>
+    </div>
+  );
+}
+function Leader({ a }: { a: LeaderRow }) {
+  return (
+    <div className="grid gap-0.5">
+      <div className="flex justify-between gap-2"><Link href={`/a/${a.name}`} className="truncate hover:underline">@{a.name}</Link><span className="mono">{a.calibration ?? "—"}</span></div>
+      <div className="mono text-xs text-[var(--dim)]">resolution {a.resolution ?? "—"}% · word {a.word_rate ?? "—"}% · {a.kept}/{a.scored}</div>
     </div>
   );
 }

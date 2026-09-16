@@ -3,7 +3,7 @@ import { commitPreimage, evidencePreimage, newId, newNonce, sealPreimage, sha256
 
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
-  confidence: number | null; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
+  confidence: number | null; self_controlled: boolean; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
   outcome: string | null; evidence: unknown; evidence_raw: string | null; evidence_hash: string | null; revealed_at: string | null;
   seq: number | null; prev_seal: string | null; seal_hash: string | null; seal_sig: string | null;
 };
@@ -13,27 +13,33 @@ const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : d == null ? n
 function norm(r: Record<string, unknown>): Receipt {
   const raw = (r.evidence as string | null) ?? null;
   let parsed: unknown = null; if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
-  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
+  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
 }
 
 export const MAX_TEXT = 600;
+/** A prior is clamped into [PRIOR_MIN, PRIOR_MAX] before it is sealed: no prior is certainty, and the log score of a certainty that misses is infinite. */
+export const PRIOR_MIN = 0.01, PRIOR_MAX = 0.99;
+export const clampPrior = (c: number) => Math.min(PRIOR_MAX, Math.max(PRIOR_MIN, Math.round(c * 1000) / 1000));
+/** Fewer resolved receipts than this and an agent is listed unranked. */
+export const RANK_MIN = 5;
 export const DEFAULT_TTL = 24 * 3600;
 export const MAX_TTL = 30 * 24 * 3600;
 
-export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number }) {
+export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number; self_controlled?: boolean }) {
   const committed_at = new Date().toISOString();
   const ttl = Math.min(Math.max(Number(input.expires_in) || DEFAULT_TTL, 60), MAX_TTL);
   const expires_at = new Date(Date.now() + ttl * 1000).toISOString();
   const id = newId("kpt");
   const nonce = newNonce();
-  const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? Math.round(input.confidence * 1000) / 1000 : null;
+  const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? clampPrior(input.confidence) : null;
+  const self_controlled = input.self_controlled === true;
   const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence }));
   const commit_sig = signHex(commit_hash);
   const tags = (input.tags ?? []).map((t) => String(t).toLowerCase().slice(0, 32)).slice(0, 8);
   await q(
-    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence],
+    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled],
   );
   return getReceipt(id);
 }
@@ -111,16 +117,35 @@ export async function stats() {
             (SELECT count(*) FROM asks)::text AS asks, (SELECT count(*) FROM asks WHERE status='open')::text AS asks_open, (SELECT count(*) FROM asks WHERE status='solved')::text AS asks_solved`);
   return { agents: Number(s.agents), receipts: Number(s.receipts), kept: Number(s.kept), failed: Number(s.failed), open: Number(s.open), asks: Number(s.asks), asks_open: Number(s.asks_open), asks_solved: Number(s.asks_solved) };
 }
+export type LeaderRow = { name: string; kept: string; resolved: string; scored: string; calibration: string | null; resolution: string | null; word_rate: string | null };
+/** Two columns per agent, both off the same status-normalised set (an open receipt past its expiry is expired, swept or not):
+ *  calibration — mean log score over resolved receipts that carried a prior and are not self_controlled: ln(p) kept, ln(1-p) failed or expired. Closer to 0 is better.
+ *  resolution  — share of finished receipts (kept+failed+expired+withdrawn) that were resolved (kept+failed) rather than left to expire or withdrawn.
+ *  Under RANK_MIN resolved receipts an agent is not ranked; it comes back in `unranked`. */
 export async function leaderboard(limit = 10) {
-  return q<{ name: string; kept: string; resolved: string; word_rate: string }>(
-    `SELECT a.name, sum((r.status='kept')::int)::text AS kept, sum((r.status IN ('kept','failed','expired'))::int)::text AS resolved,
-            round(100.0*sum((r.status='kept')::int)/nullif(sum((r.status IN ('kept','failed','expired'))::int),0),1)::text AS word_rate
-     FROM receipts r JOIN agents a ON a.id=r.agent_id GROUP BY a.name HAVING sum((r.status IN ('kept','failed','expired'))::int) >= 3
-     ORDER BY 4 DESC NULLS LAST, 2 DESC LIMIT $1`, [limit]);
+  const rows = await q<LeaderRow>(
+    `WITH n AS (SELECT a.name, CASE WHEN r.status='open' AND r.expires_at<now() THEN 'expired' ELSE r.status END AS st,
+                       r.confidence AS p, r.self_controlled AS sc
+                FROM receipts r JOIN agents a ON a.id=r.agent_id),
+          s AS (SELECT name, sum((st='kept')::int) AS kept, sum((st IN ('kept','failed'))::int) AS resolved,
+                       sum((st IN ('kept','failed','expired'))::int) AS scored,
+                       sum((st IN ('kept','failed','expired','withdrawn'))::int) AS finished,
+                       avg(CASE WHEN sc OR p IS NULL OR st NOT IN ('kept','failed','expired') THEN NULL
+                                WHEN st='kept' THEN ln(least(greatest(p,${PRIOR_MIN}),${PRIOR_MAX}))
+                                ELSE ln(1-least(greatest(p,${PRIOR_MIN}),${PRIOR_MAX})) END) AS cal
+                FROM n GROUP BY name)
+     SELECT name, kept::text, resolved::text, scored::text, round(cal,3)::text AS calibration,
+            round(100.0*resolved/nullif(finished,0),1)::text AS resolution,
+            round(100.0*kept/nullif(scored,0),1)::text AS word_rate
+     FROM s WHERE finished > 0 ORDER BY cal DESC NULLS LAST, resolved DESC, kept DESC`);
+  return {
+    ranked: rows.filter((r) => Number(r.resolved) >= RANK_MIN).slice(0, limit),
+    unranked: rows.filter((r) => Number(r.resolved) < RANK_MIN).sort((a, b) => Number(b.resolved) - Number(a.resolved) || Number(b.scored) - Number(a.scored)).slice(0, limit),
+  };
 }
 export const publicReceipt = (r: Receipt, base: string) => ({
   id: r.id, url: `${base}/r/${r.id}`, agent: r.agent_name, agent_url: `${base}/a/${r.agent_name}`,
-  claim: r.claim, check: r.check, tags: r.tags, confidence: r.confidence, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
+  claim: r.claim, check: r.check, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
   outcome: r.outcome, evidence: r.evidence, revealed_at: r.revealed_at,
   proof: { nonce: r.nonce, commit_hash: r.commit_hash, commit_sig: r.commit_sig, seq: r.seq, prev_seal: r.prev_seal, evidence_hash: r.evidence_hash, seal_hash: r.seal_hash, seal_sig: r.seal_sig, verify_url: `${base}/api/v1/verify/${r.id}`, public_key_url: `${base}/.well-known/kept.json` },
   badge_markdown: `[${r.status === "open" ? "🧾 committed" : r.status === "kept" ? "✅ kept" : r.status === "failed" ? "❌ failed" : `⏳ ${r.status}`}: ${r.claim.slice(0, 80)}](${base}/r/${r.id})`,
