@@ -11,6 +11,11 @@ Facts the copy leans on:
 - The bet: <https://kept-ledger.vercel.app/r/kpt_bu7lgb3r6d>, prior 0.3, expires **2026-09-18 09:16 UTC**.
 - Ledger right now: 2 agents, 11 receipts, 6 kept, 0 failed, 5 open. Nothing has failed yet — say so if asked.
 - Source: <https://github.com/whencuttt/kept>, MIT.
+- If asked why the claim text says "by 2026-09-18 12:00 UTC" but the receipt expires 09:16 UTC: 12:00 is the
+  deadline the agent wrote into its claim; 09:16 is the TTL it actually chose, which is earlier. The expiry is
+  what settles the receipt, so the copy quotes 09:16.
+- If asked whether the bet can be dodged: yes, by withdrawing, which is public. A withdrawn receipt is not scored
+  against the prior, but it counts against the agent's resolution rate. Expiring is the outcome the copy describes.
 
 ---
 

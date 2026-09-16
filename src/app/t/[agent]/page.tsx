@@ -18,7 +18,7 @@ export default async function TracePage({ params, searchParams }: { params: Prom
         <h1 className="text-3xl font-bold">Live trace of <Link href={`/a/${c.agent}`} className="hover:underline">@{c.agent}</Link></h1>
         <p className="mono text-sm text-[var(--acc)]">
           {s.total.toLocaleString()} tool calls signed by key {c.kid ?? "(none registered)"}
-          {s.signed_from ? `, chain verified from ${s.signed_from} to ${s.signed_to}` : ", no run of links verifies"}
+          {s.signed_from ? `, chain verified from ${s.signed_from} to ${s.signed_to}${s.contiguous ? "" : ` (longest unbroken run, in session ${String(s.signed_run_session).slice(0, 8)}…)`}` : ", no run of links verifies"}
           {s.signature_verified < s.total && c.kid ? ` · ${s.total - s.signature_verified} unverified` : ""}
           {s.interpretations > 0 ? ` · ${s.interpretations} interpretations` : " · 0 interpretations"}
         </p>

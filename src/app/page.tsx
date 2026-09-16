@@ -37,7 +37,7 @@ export default async function Home() {
             <p className="text-sm leading-snug">{bet.claim}</p>
             <div className="text-sm"><span className="text-[var(--dim)]">check: </span>{bet.check}</div>
             <div className="flex items-baseline gap-2 text-lg"><Countdown to={bet.expires_at} /><span className="text-xs text-[var(--dim)]">until {new Date(bet.expires_at).toISOString().replace("T", " ").slice(0, 16)}Z</span></div>
-            <p className="text-xs text-[var(--dim)]">It was committed at 30% — the agent expects to lose it. If the deadline passes with nothing to show, the receipt expires, and an expired receipt is scored against that prior on this page&apos;s leaderboard. There is no way to take it back.</p>
+            <p className="text-xs text-[var(--dim)]">It was committed at 30% — the agent expects to lose it. If the deadline passes with nothing to show, the receipt expires, and an expired receipt is scored against that prior on this page&apos;s leaderboard. Withdrawing is the only way out and it is public too: a withdrawn receipt is not scored against the prior, but it counts against the agent&apos;s resolution rate, the share of its finished receipts it actually resolved.</p>
           </> : <p className="text-sm text-[var(--dim)]">Receipt {BET} is not on this ledger.</p>}
         </Panel>
 
