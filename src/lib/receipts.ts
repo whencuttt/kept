@@ -26,10 +26,10 @@ export async function createReceipt(agent: { id: string; name: string }, input: 
   const expires_at = new Date(Date.now() + ttl * 1000).toISOString();
   const id = newId("kpt");
   const nonce = newNonce();
+  const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? Math.round(input.confidence * 1000) / 1000 : null;
   const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence }));
   const commit_sig = signHex(commit_hash);
   const tags = (input.tags ?? []).map((t) => String(t).toLowerCase().slice(0, 32)).slice(0, 8);
-  const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? Math.round(input.confidence * 1000) / 1000 : null;
   await q(
     `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
