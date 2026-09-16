@@ -25,6 +25,33 @@ export const RANK_MIN = 5;
 export const DEFAULT_TTL = 24 * 3600;
 export const MAX_TTL = 30 * 24 * 3600;
 
+export const EXPIRES_IN_UNIT = `expires_in is a duration in SECONDS (min 60, max ${MAX_TTL} = 30 days). An ISO-8601 instant such as "2026-09-19T14:00:00Z" is also accepted and converted. It is sealed into the receipt and cannot be amended afterwards, so a value that is not understood is rejected, never silently defaulted or clamped.`;
+
+/** Parse the caller's expires_in. Returns seconds, or undefined to mean "use the default".
+ *  Rejects rather than substitutes: this value becomes a sealed deadline the agent cannot amend,
+ *  and a receipt whose expiry is not the one its author asked for cannot be honestly resolved.
+ *  (This function exists because `Number(v) || DEFAULT_TTL` silently turned an ISO date string
+ *  into a 24h expiry, and Math.min/Math.max silently clamped out-of-range durations.) */
+export function parseExpiresIn(v: unknown): { ok: true; value: number | undefined } | { ok: false; error: string } {
+  if (v === undefined || v === null) return { ok: true, value: undefined };
+  if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return { ok: false, error: `expires_in must be a finite number. ${EXPIRES_IN_UNIT}` };
+    if (n < 60) return { ok: false, error: `expires_in ${n} is under the 60s minimum. ${EXPIRES_IN_UNIT}` };
+    if (n > MAX_TTL) return { ok: false, error: `expires_in ${n} is over the ${MAX_TTL}s maximum. ${EXPIRES_IN_UNIT}` };
+    return { ok: true, value: Math.floor(n) };
+  }
+  if (typeof v === "string") {
+    const t = Date.parse(v.trim());
+    if (Number.isNaN(t)) return { ok: false, error: `expires_in ${JSON.stringify(v)} is neither a number of seconds nor an ISO-8601 instant. ${EXPIRES_IN_UNIT}` };
+    const secs = Math.floor((t - Date.now()) / 1000);
+    if (secs < 60) return { ok: false, error: `expires_in ${JSON.stringify(v)} is in the past or less than 60s away. ${EXPIRES_IN_UNIT}` };
+    if (secs > MAX_TTL) return { ok: false, error: `expires_in ${JSON.stringify(v)} is more than 30 days away. ${EXPIRES_IN_UNIT}` };
+    return { ok: true, value: secs };
+  }
+  return { ok: false, error: `expires_in must be a number of seconds or an ISO-8601 string. ${EXPIRES_IN_UNIT}` };
+}
+
 /** observes: the coverage boundary the check actually sees. Accepted either as a plain sentence or as
  *  the typed tuple {source, selector, window, credential}; both canonicalise to one string, and that one
  *  string is what is sealed. Bounds are on the canonical form, so what is hashed is what was measured. */
@@ -72,7 +99,11 @@ export function selfObservable(r: Receipt): { self_observable: boolean; reason: 
 
 export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; self_observable?: boolean }) {
   const committed_at = new Date().toISOString();
-  const ttl = Math.min(Math.max(Number(input.expires_in) || DEFAULT_TTL, 60), MAX_TTL);
+  // Never silently substitute a deadline: callers validate with parseExpiresIn and return 400.
+  // If an unvalidated value reaches here we throw rather than seal an expiry nobody asked for.
+  const p = parseExpiresIn(input.expires_in);
+  if (!p.ok) throw new Error(p.error);
+  const ttl = p.value ?? DEFAULT_TTL;
   const expires_at = new Date(Date.now() + ttl * 1000).toISOString();
   const id = newId("kpt");
   const nonce = newNonce();

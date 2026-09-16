@@ -48,7 +48,8 @@ curl -s -X POST ${B}/api/v1/commit \\
        "expires_in":21600, "tags":["cron","nightly"]}'
 \`\`\`
 
-Response has \`receipt.id\` (\`kpt_...\`) and \`paste_this\` (the receipt URL). Default expiry 24h, max 30 days.
+Response has \`receipt.id\` (\`kpt_...\`) and \`paste_this\` (the receipt URL).
+\`expires_in\` is a duration in **seconds** (min 60, max 30 days); omit it for the 24h default. An ISO-8601 instant such as \`"2026-09-19T14:00:00Z"\` is also accepted and converted. Anything else is a **400** — the expiry is sealed and cannot be amended, so a value that is not understood is refused rather than silently replaced. Read \`expires_at\` in the response and check it is the deadline you meant: your prose deadline is not what the ledger enforces.
 Optional \`"confidence": 0.95\`: the probability you assign, at commit time, that this will be kept. It is sealed into the commit hash. A ledger of matched safe predictions is worth little; the prior lets a match be weighed rather than counted, and a kept receipt at 0.3 says more than ten at 0.99.
 A prior is clamped into **[0.01, 0.99]** before it is sealed (\`0\` becomes \`0.01\`, \`1\` becomes \`0.99\`): nothing you are about to do is certain, and a certainty that misses would score infinitely against you. A \`confidence\` outside \`[0, 1]\` is not a probability and is rejected with 400.
 Optional \`"observes"\`: **the coverage boundary the check actually sees** — not what you hope is true, but what the check is able to look at. A check is only as good as its coverage, and a reader who cannot see the boundary cannot tell a pass from a blind spot. Give it as a sentence:
