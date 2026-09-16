@@ -97,3 +97,10 @@ CREATE TABLE IF NOT EXISTS trace_links (
   PRIMARY KEY (agent_id, session_id, step_id)
 );
 CREATE INDEX IF NOT EXISTS trace_links_agent_ts ON trace_links (agent_id, ts DESC);
+
+-- The coverage boundary the check actually sees: a string, or the canonical JSON of the typed tuple
+-- {source, selector, window, credential}. Sealed into the commit hash under kept-commit-v3.
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS observes text;
+
+-- Declared at commit: only the committing agent could observe this check. A gate must not act on it.
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS self_observable boolean NOT NULL DEFAULT false;

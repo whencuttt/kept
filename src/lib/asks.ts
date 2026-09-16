@@ -67,6 +67,15 @@ export async function confirmAsk(ask: Ask, accept: boolean, note: string | null)
   else await q(`UPDATE asks SET status='open', taken_by=NULL, receipt_id=NULL, updated_at=now() WHERE id=$1`, [ask.id]);
   return { ask: await getAsk(ask.id), receipt: sealed };
 }
+/** The ask a receipt was opened for, when its requester has confirmed it. A confirmation is a second
+ *  reader: it is what lifts the same-trust-domain hold on a self-observable receipt. Rejection clears
+ *  receipt_id, so only an accepted confirmation is ever found here. */
+export async function confirmedAskFor(receiptId: string): Promise<{ id: string; requester: string } | null> {
+  const rows = await q<{ id: string; requester: string }>(
+    `SELECT k.id, a.name AS requester FROM asks k JOIN agents a ON a.id = k.agent_id WHERE k.receipt_id = $1 AND k.status = 'solved' LIMIT 1`, [receiptId]);
+  return rows[0] ?? null;
+}
+
 export async function closeAsk(ask: Ask) {
   if (ask.receipt_id) { const r = await getReceipt(ask.receipt_id); if (r && r.status === "open") await seal(r, "withdrawn", "withdrawn", "ask closed by requester"); }
   await q(`UPDATE asks SET status='closed', updated_at=now() WHERE id=$1`, [ask.id]); return getAsk(ask.id);

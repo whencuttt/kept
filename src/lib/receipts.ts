@@ -1,9 +1,9 @@
 import { q } from "./db";
-import { commitPreimage, evidencePreimage, newId, newNonce, sealPreimage, sha256, signHex } from "./crypto";
+import { canonicalObserves, commitPreimage, commitPreimageVersion, evidencePreimage, newId, newNonce, observesCredential, sealPreimage, sha256, signHex, type ObservesTuple } from "./crypto";
 
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
-  confidence: number | null; self_controlled: boolean; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
+  confidence: number | null; self_controlled: boolean; observes: string | null; self_observable: boolean; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
   outcome: string | null; evidence: unknown; evidence_raw: string | null; evidence_hash: string | null; revealed_at: string | null;
   seq: number | null; prev_seal: string | null; seal_hash: string | null; seal_sig: string | null;
 };
@@ -13,7 +13,7 @@ const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : d == null ? n
 function norm(r: Record<string, unknown>): Receipt {
   const raw = (r.evidence as string | null) ?? null;
   let parsed: unknown = null; if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
-  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
+  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, observes: (r.observes as string | null) ?? null, self_observable: r.self_observable === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
 }
 
 export const MAX_TEXT = 600;
@@ -25,7 +25,52 @@ export const RANK_MIN = 5;
 export const DEFAULT_TTL = 24 * 3600;
 export const MAX_TTL = 30 * 24 * 3600;
 
-export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number; self_controlled?: boolean }) {
+/** observes: the coverage boundary the check actually sees. Accepted either as a plain sentence or as
+ *  the typed tuple {source, selector, window, credential}; both canonicalise to one string, and that one
+ *  string is what is sealed. Bounds are on the canonical form, so what is hashed is what was measured. */
+export const MIN_OBSERVES = 8, MAX_OBSERVES = 600;
+export type ObservesResult = { ok: true; value: string | null } | { ok: false; error: string };
+export function parseObserves(raw: unknown): ObservesResult {
+  if (raw == null || raw === "") return { ok: true, value: null };
+  if (typeof raw === "string") {
+    const v = raw.trim();
+    if (v.length < MIN_OBSERVES) return { ok: false, error: `observes: name the coverage boundary the check actually sees (${MIN_OBSERVES}+ chars), e.g. "rows in listings visible to the job's own DB role, at the moment of the after-snapshot"` };
+    if (v.length > MAX_OBSERVES) return { ok: false, error: `observes must be <= ${MAX_OBSERVES} chars` };
+    return { ok: true, value: v };
+  }
+  if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "observes: a string, or an object with source, selector, window, credential" };
+  const o = raw as Record<string, unknown>;
+  const extra = Object.keys(o).filter((k) => !(["source", "selector", "window", "credential"] as string[]).includes(k));
+  if (extra.length) return { ok: false, error: `observes: only source, selector, window, credential are sealed; remove ${extra.join(", ")}` };
+  for (const k of Object.keys(o)) if (o[k] != null && typeof o[k] !== "string") return { ok: false, error: `observes.${k} must be a string` };
+  const t = o as ObservesTuple;
+  if (!String(t.source ?? "").trim() || !String(t.selector ?? "").trim()) return { ok: false, error: "observes: source (what is read) and selector (which part of it) are both required; window and credential are optional" };
+  const value = canonicalObserves(t);
+  const content = (["source", "selector", "window", "credential"] as const).map((k) => String(t[k] ?? "").trim()).join("").length;
+  if (content < MIN_OBSERVES) return { ok: false, error: `observes: too thin to be a boundary (${MIN_OBSERVES}+ chars across its fields)` };
+  if (value.length > MAX_OBSERVES) return { ok: false, error: `observes: canonical form must be <= ${MAX_OBSERVES} chars (it is ${value.length})` };
+  return { ok: true, value };
+}
+
+/** A credential that is the receipt's own agent, or a word meaning "me". */
+const SELF_CREDENTIALS = new Set(["self", "me", "my", "mine", "own", "owner", "itself", "this agent", "same agent", "the agent", "the worker", "the job", "the job itself"]);
+/** The same-trust-domain rule. A check only the committing agent could see is not independently
+ *  observable, so a gate must not act on it: the verdict reads unresolved until a second reader confirms.
+ *  Three ways in — the agent declared it, the sealed observes names the agent's own credential, or no
+ *  boundary was sealed at all on a receipt the agent alone controls. */
+export function selfObservable(r: Receipt): { self_observable: boolean; reason: string | null } {
+  const cred = observesCredential(r.observes);
+  const owned = cred != null && (() => {
+    const n = cred.trim().toLowerCase().replace(/^@/, "").replace(/^agent:/, "").trim();
+    return n === r.agent_name.toLowerCase() || SELF_CREDENTIALS.has(n);
+  })();
+  if (owned) return { self_observable: true, reason: `same-trust-domain rule: observes.credential is "${cred}", the receipt's own agent, so observer and subject are the same party` };
+  if (r.self_observable) return { self_observable: true, reason: "same-trust-domain rule: the agent declared self_observable at commit, so only the committing agent could see the check" };
+  if (!r.observes && r.self_controlled) return { self_observable: true, reason: "same-trust-domain rule: no observes boundary was sealed and the receipt is self_controlled, so nothing outside the committing agent could see the check" };
+  return { self_observable: false, reason: null };
+}
+
+export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; self_observable?: boolean }) {
   const committed_at = new Date().toISOString();
   const ttl = Math.min(Math.max(Number(input.expires_in) || DEFAULT_TTL, 60), MAX_TTL);
   const expires_at = new Date(Date.now() + ttl * 1000).toISOString();
@@ -33,13 +78,15 @@ export async function createReceipt(agent: { id: string; name: string }, input: 
   const nonce = newNonce();
   const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? clampPrior(input.confidence) : null;
   const self_controlled = input.self_controlled === true;
-  const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence }));
+  const observes = input.observes ?? null;
+  const self_observable = input.self_observable === true;
+  const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence, observes }));
   const commit_sig = signHex(commit_hash);
   const tags = (input.tags ?? []).map((t) => String(t).toLowerCase().slice(0, 32)).slice(0, 8);
   await q(
-    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled],
+    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled, observes, self_observable)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled, observes, self_observable],
   );
   return getReceipt(id);
 }
@@ -145,8 +192,8 @@ export async function leaderboard(limit = 10) {
 }
 export const publicReceipt = (r: Receipt, base: string) => ({
   id: r.id, url: `${base}/r/${r.id}`, agent: r.agent_name, agent_url: `${base}/a/${r.agent_name}`,
-  claim: r.claim, check: r.check, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
+  claim: r.claim, check: r.check, observes: r.observes, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled, self_observable: selfObservable(r).self_observable, self_observable_declared: r.self_observable, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
   outcome: r.outcome, evidence: r.evidence, revealed_at: r.revealed_at,
-  proof: { nonce: r.nonce, commit_hash: r.commit_hash, commit_sig: r.commit_sig, seq: r.seq, prev_seal: r.prev_seal, evidence_hash: r.evidence_hash, seal_hash: r.seal_hash, seal_sig: r.seal_sig, verify_url: `${base}/api/v1/verify/${r.id}`, public_key_url: `${base}/.well-known/kept.json` },
+  proof: { nonce: r.nonce, commit_preimage_version: commitPreimageVersion(r), commit_hash: r.commit_hash, commit_sig: r.commit_sig, seq: r.seq, prev_seal: r.prev_seal, evidence_hash: r.evidence_hash, seal_hash: r.seal_hash, seal_sig: r.seal_sig, verify_url: `${base}/api/v1/verify/${r.id}`, public_key_url: `${base}/.well-known/kept.json` },
   badge_markdown: `[${r.status === "open" ? "🧾 committed" : r.status === "kept" ? "✅ kept" : r.status === "failed" ? "❌ failed" : `⏳ ${r.status}`}: ${r.claim.slice(0, 80)}](${base}/r/${r.id})`,
 });
