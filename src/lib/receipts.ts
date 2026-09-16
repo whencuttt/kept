@@ -27,11 +27,13 @@ export const MAX_TTL = 30 * 24 * 3600;
 
 export const EXPIRES_IN_UNIT = `expires_in is a duration in SECONDS (min 60, max ${MAX_TTL} = 30 days). A fully-qualified ISO-8601 instant such as "2026-09-19T14:00:00.250Z" or "2026-09-19T19:30:00+05:30" is also accepted and sealed to the exact millisecond named. An ISO string with NO timezone offset names no instant and is rejected: the ledger will not guess a zone. It is sealed into the receipt and cannot be amended afterwards, so a value that is not understood is rejected, never silently defaulted, clamped or truncated.`;
 
-/** What the caller asked for, once understood. `default` and `seconds` are durations measured from
- *  commit time; `instant` is an absolute moment the caller named, carried as epoch milliseconds so it
- *  is sealed exactly rather than rounded into a whole-second duration. */
-export type ExpiresIn = { kind: "default" } | { kind: "seconds"; seconds: number } | { kind: "instant"; atMs: number };
-export const DEFAULT_EXPIRES_IN: ExpiresIn = { kind: "default" };
+/** What the caller asked for, once understood. `seconds` is a duration measured from commit time;
+ *  `instant` is an absolute moment the caller named, carried as epoch milliseconds so it is sealed
+ *  exactly rather than rounded into a whole-second duration.
+ *  Absence is `undefined`, NOT a third variant: every caller supplies its own default (24h on
+ *  /commit, 72h on an ask take), and a "default" member would silently swallow those `??` fallbacks
+ *  and seal 24h everywhere — a deadline nobody asked for, which is the bug this file exists to fix. */
+export type ExpiresIn = { kind: "seconds"; seconds: number } | { kind: "instant"; atMs: number };
 export const secondsExpiresIn = (seconds: number): ExpiresIn => ({ kind: "seconds", seconds });
 
 /** A fully-qualified ISO-8601 instant: date, time, and an EXPLICIT offset (Z, +HH:MM or +HHMM). */
@@ -50,8 +52,8 @@ const ISO_NO_OFFSET = /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)
  *  into whole seconds of duration, sealing up to 1s early.)
  *  NOTE: `null` and an omitted key are deliberately the same path — "no value" either way. A caller
  *  whose upstream produced nothing therefore receives the default, not a 400. */
-export function parseExpiresIn(v: unknown): { ok: true; value: ExpiresIn } | { ok: false; error: string } {
-  if (v === undefined || v === null) return { ok: true, value: DEFAULT_EXPIRES_IN };
+export function parseExpiresIn(v: unknown): { ok: true; value: ExpiresIn | undefined } | { ok: false; error: string } {
+  if (v === undefined || v === null) return { ok: true, value: undefined };
   if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
     const n = Number(v);
     if (!Number.isFinite(n)) return { ok: false, error: `expires_in must be a finite number. ${EXPIRES_IN_UNIT}` };
@@ -137,13 +139,13 @@ export async function createReceipt(agent: { id: string; name: string }, input: 
   const committed_at = now.toISOString();
   // Never silently substitute a deadline: callers validate with parseExpiresIn and return 400.
   // If an unvalidated value reaches here we throw rather than seal an expiry nobody asked for.
-  const e = input.expires_in ?? DEFAULT_EXPIRES_IN;
-  if (typeof e !== "object" || e === null || !("kind" in e))
+  const e = input.expires_in;
+  if (e !== undefined && (typeof e !== "object" || e === null || !("kind" in e)))
     throw new Error("expires_in must be validated with parseExpiresIn before createReceipt; an unparsed value would seal an expiry nobody asked for");
   // An instant is sealed exactly as named, to the millisecond. Only a duration is measured from now.
-  const expires_at = e.kind === "instant"
+  const expires_at = e?.kind === "instant"
     ? new Date(e.atMs).toISOString()
-    : new Date(now.getTime() + (e.kind === "seconds" ? e.seconds : DEFAULT_TTL) * 1000).toISOString();
+    : new Date(now.getTime() + (e?.kind === "seconds" ? e.seconds : DEFAULT_TTL) * 1000).toISOString();
   const id = newId("kpt");
   const nonce = newNonce();
   const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? clampPrior(input.confidence) : null;

@@ -14,12 +14,13 @@
  *     (the old path sealed up to 1s early: kpt_4jneaf347p asked 12:00:00.000Z, sealed 11:59:59.912Z);
  *   - +05:30 converts correctly, i.e. to the same instant as the equivalent Z string;
  *   - numeric seconds are unchanged — still a duration measured from commit time;
+ *   - absence reaches each caller's own default (24h on /commit, 72h on an ask take), never a shared one;
  *   - `null` is treated exactly as an omitted key. That is a DESIGN CHOICE, not an oversight, and
  *     this test asserts the two are identical so nobody "fixes" it by accident. It is also why
  *     receipt kpt_6t4nnwnssd resolved `failed`: its sealed check demanded a 400 here, and the check
  *     governs. See src/lib/receipts.ts.
  */
-import { DEFAULT_TTL, MAX_TTL, parseExpiresIn, type ExpiresIn } from "../src/lib/receipts";
+import { DEFAULT_TTL, MAX_TTL, parseExpiresIn, secondsExpiresIn, type ExpiresIn } from "../src/lib/receipts";
 
 let pass = 0;
 const fails: string[] = [];
@@ -86,9 +87,25 @@ console.log("\n5. null is treated as an omitted key — by design, asserted so i
   const n = parseExpiresIn(null), u = parseExpiresIn(undefined);
   check("null is accepted", n.ok);
   check("undefined is accepted", u.ok);
-  check("null and undefined produce the IDENTICAL value", JSON.stringify(n) === JSON.stringify(u), `${JSON.stringify(n)} vs ${JSON.stringify(u)}`);
-  check("both mean 'use the default'", n.ok && n.value.kind === "default");
-  console.log(`       (the default is ${DEFAULT_TTL}s; null carries no value to destroy, unlike the ISO-string bug that started this)`);
+  check("null and undefined produce the IDENTICAL value", JSON.stringify(n) === JSON.stringify(u) && (n.ok ? n.value : 0) === (u.ok ? u.value : 1), `${JSON.stringify(n)} vs ${JSON.stringify(u)}`);
+  check("both mean 'nothing was asked for' (undefined, not a third variant)", n.ok && n.value === undefined);
+  console.log(`       (/commit then applies ${DEFAULT_TTL}s; null carries no value to destroy, unlike the ISO-string bug that started this)`);
+}
+
+console.log("\n5b. absence must reach each caller's OWN default, not a shared one");
+{
+  // Regression guard. parseExpiresIn briefly returned a {kind:"default"} member instead of undefined.
+  // It type-checked, /commit was unaffected, and every live probe passed -- but it is not nullish, so
+  // takeAsk's `expires_in ?? secondsExpiresIn(72 * 3600)` stopped firing and an ask taken without an
+  // expires_in would have sealed 24h instead of 72h: a deadline nobody asked for, which is the exact
+  // defect class this whole file is about. Absence is undefined so every `??` fallback keeps working.
+  const absent = parseExpiresIn(undefined);
+  const viaTakeAsk = (absent.ok ? absent.value : null) ?? secondsExpiresIn(72 * 3600); // takeAsk, src/lib/asks.ts
+  check("an ask taken with no expires_in still gets 72h", viaTakeAsk.kind === "seconds" && viaTakeAsk.seconds === 259200, JSON.stringify(viaTakeAsk));
+  // createReceipt's own branch: undefined falls through to DEFAULT_TTL, an explicit duration does not.
+  const commitTtl = (e?: ExpiresIn) => (e?.kind === "seconds" ? e.seconds : DEFAULT_TTL);
+  check("/commit with no expires_in still gets 24h", commitTtl(absent.ok ? absent.value : undefined) === DEFAULT_TTL);
+  check("/commit with an explicit 3600 is not overridden by the default", commitTtl(secondsExpiresIn(3600)) === 3600);
 }
 
 console.log("\n6. everything else is still refused rather than substituted");
