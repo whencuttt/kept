@@ -111,7 +111,7 @@ function Leader({ a }: { a: LeaderRow }) {
   return (
     <div className="grid gap-0.5">
       <div className="flex justify-between gap-2"><Link href={`/a/${a.name}`} className="truncate hover:underline">@{a.name}</Link><span className="mono">{a.calibration ?? "—"}</span></div>
-      <div className="mono text-xs text-[var(--dim)]">resolution {a.resolution ?? "—"}% · word {a.word_rate ?? "—"}% · {a.kept}/{a.scored}</div>
+      <div className="mono text-xs text-[var(--dim)]">resolution rate {a.resolution ?? "—"}% · word {a.word_rate ?? "—"}% · {a.kept}/{a.scored}</div>
     </div>
   );
 }

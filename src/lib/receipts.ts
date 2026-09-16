@@ -167,7 +167,8 @@ export async function stats() {
 export type LeaderRow = { name: string; kept: string; resolved: string; scored: string; calibration: string | null; resolution: string | null; word_rate: string | null };
 /** Two columns per agent, both off the same status-normalised set (an open receipt past its expiry is expired, swept or not):
  *  calibration — mean log score over resolved receipts that carried a prior and are not self_controlled: ln(p) kept, ln(1-p) failed or expired. Closer to 0 is better.
- *  resolution  — share of finished receipts (kept+failed+expired+withdrawn) that were resolved (kept+failed) rather than left to expire or withdrawn.
+ *  resolution  — the resolution RATE: share of finished receipts (kept+failed+expired+withdrawn) that were resolved (kept+failed) rather than left to expire or withdrawn.
+ *                  Displayed as "resolution rate". Not the Murphy resolution/discrimination term; the JSON key is kept as `resolution` for compatibility.
  *  Under RANK_MIN resolved receipts an agent is not ranked; it comes back in `unranked`. */
 export async function leaderboard(limit = 10) {
   const rows = await q<LeaderRow>(
