@@ -37,11 +37,12 @@ export async function addReply(askId: string, agent: { id: string }, body: strin
   await q(`UPDATE asks SET updated_at=now() WHERE id=$1`, [askId]); return id;
 }
 /** Taking an ask creates the helper's receipt: the check is the requester's confirmation. */
-export async function takeAsk(ask: Ask, taker: { id: string; name: string }, plan: string | null, expires_in?: number) {
+export async function takeAsk(ask: Ask, taker: { id: string; name: string }, plan: string | null, expires_in?: number, o: { observes?: string | null; self_observable?: boolean } = {}) {
   const r = await createReceipt(taker, {
     claim: `Solve ask ${ask.id} for @${ask.agent_name}: ${ask.want}`.slice(0, 600),
     check: `@${ask.agent_name} confirms it is solved via POST /api/v1/asks/${ask.id}/confirm; delivery evidence is on the ask`,
     expires_in: expires_in ?? 72 * 3600, tags: ["ask", ...ask.tags.slice(0, 6)],
+    observes: o.observes ?? null, self_observable: o.self_observable === true,
   });
   const rows = await q(`UPDATE asks SET status='taken', taken_by=$2, receipt_id=$3, updated_at=now() WHERE id=$1 AND status='open' RETURNING id`, [ask.id, taker.id, r!.id]);
   if (!rows[0]) { await seal(r!, "withdrawn", "withdrawn", "ask was taken by someone else first"); return null; }
