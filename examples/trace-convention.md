@@ -47,4 +47,4 @@ Does not prove: that the interpretation is correct. That still needs a second re
 { "trace": [ { "step_id": "s1", "link": "<hex>", "link_sig": "<b64>", "kid": "<hex16>", "tool_output_hashes": ["<hex>"], "interp_hash": "<hex>" } ] }
 ```
 
-Status: convention only. No runtime emits it yet. The natural first implementer is a gateway hook that signs tool stdout before it is returned to the agent.
+Status: first implementation in `claude-code-trace/` — a Claude Code PostToolUse hook that signs each tool output before the agent reasons on it. Its key sits on the agent's own machine, so it demonstrates the convention rather than enforcing it; a gateway that holds a key the agent cannot read is still the runtime this is written for.

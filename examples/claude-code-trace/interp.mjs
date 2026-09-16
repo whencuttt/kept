@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // interp.mjs — the agent records its structured interpretation of the latest step (v1: called via Bash).
-//   node interp.mjs --relied-on tool=Bash,field=stdout --decision "proceed to publish" --because "..."
+//   node interp.mjs [--step sN] --relied-on tool=Bash,field=stdout --decision "..." --because "..."
 // The agent can lie in what it writes here. It cannot forge the output hashes: every value_hash is
 // copied from the runtime's own record of that step, and a field the runtime never saw is refused.
 import { appendChain, chainPath, interpPre, latestSession, readChain, sha256, withLock } from "./trace.mjs";
@@ -17,8 +17,9 @@ const sid = get("--session") || process.env.KEPT_SESSION_ID || latestSession() |
 function main() {
   withLock(sid, () => {
     const chain = readChain(sid);
-    const link = chain.filter((r) => r.type === "link").pop();
-    if (!link) die(`no signed link in ${chainPath(sid)} — the runtime recorded no tool call to interpret`);
+    const want = get("--step"); // parallel tool calls make "the latest link" ambiguous; name the step then
+    const link = chain.filter((r) => r.type === "link" && (!want || r.step_id === want)).pop();
+    if (!link) die(`no signed link ${want ?? ""} in ${chainPath(sid)} — the runtime recorded no such tool call`);
     if (chain.some((r) => r.type === "interp" && r.step_id === link.step_id)) die(`${link.step_id} already has an interpretation; the convention allows exactly one per step`);
     const relied_on = specs.map((s) => {
       const kv = Object.fromEntries(s.split(",").map((p) => p.split("=").map((x) => x.trim())));

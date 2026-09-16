@@ -2,6 +2,7 @@
 // attach.mjs — export a session chain as the receipt evidence shape from ../trace-convention.md and
 // attach it to a Kept receipt via POST /api/v1/reveal.
 //   KEPT_API_KEY=kept_sk_... node attach.mjs --receipt kpt_xxx --outcome kept [--session s] [--full 10] [--print]
+import { fileURLToPath } from "node:url";
 import { latestSession, publicPem, readChain, sha256, verifyChain } from "./trace.mjs";
 
 const a = process.argv.slice(2), get = (f, d = null) => { const i = a.indexOf(f); return i < 0 ? d : a[i + 1]; };
@@ -31,7 +32,7 @@ export function toEvidence(recs, full = Number(get("--full", "10"))) {
   return { trace: [fold(links)], tiered: true };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const sid = get("--session") || process.env.KEPT_SESSION_ID || latestSession() || die("no session chain found");
   const recs = readChain(sid);
   if (!recs.length) die(`chain for session ${sid} is empty`);

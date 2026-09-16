@@ -13,6 +13,10 @@ const fieldHashes = (r) => (r && typeof r === "object" && !Array.isArray(r))
 
 try {
   const p = JSON.parse(readFileSync(0, "utf8"));
+  // Don't trace the tracing: the agent runs interp.mjs and attach.mjs through Bash, and a link whose
+  // output hash is interp.mjs's own stdout is bookkeeping, not evidence. (A dishonest agent could append
+  // this string to any command to skip a step — free, under the trust model the README states.)
+  if (/claude-code-trace\/(interp|attach)\.mjs/.test(p.tool_input?.command ?? "")) process.exit(0);
   const sid = p.session_id || "no-session";
   const { priv, kid, created } = loadKey();
   if (created) process.stderr.write(`kept-trace: generated ${keyPath()} — kid ${kid}\n`);

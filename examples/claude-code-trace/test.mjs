@@ -18,7 +18,7 @@ const t = (name, ok, detail = "") => { ok ? pass++ : fail++; console.log(`${ok ?
 const run = (script, args, input = "") => spawnSync(process.execPath, [join(here, script), ...args], { input, encoding: "utf8", env: { ...process.env, KEPT_TRACE_HOME: HOME } });
 
 const SID = "sess-test-1";
-const payload = (tool_name, tool_response) => JSON.stringify({ session_id: SID, transcript_path: "/tmp/t.jsonl", cwd: "/tmp", permission_mode: "default", hook_event_name: "PostToolUse", tool_name, tool_input: {}, tool_response, tool_use_id: "toolu_" + tool_name });
+const payload = (tool_name, tool_response, tool_input = {}) => JSON.stringify({ session_id: SID, transcript_path: "/tmp/t.jsonl", cwd: "/tmp", permission_mode: "default", hook_event_name: "PostToolUse", tool_name, tool_input, tool_response, tool_use_id: "toolu_" + tool_name });
 const steps = [
   ["Bash", { stdout: "42\n", stderr: "", interrupted: false }, "rows_changed is 42, above zero", "proceed to publish", "stdout"],
   ["Read", { file: "/tmp/a.txt", content: "hello" }, "the file exists and is non-empty", "use the file as input", "content"],
@@ -78,6 +78,16 @@ const big = Array.from({ length: 60 }, (_, i) => links[i % 3]).map((l, i) => ({ 
 const tiered = toEvidence(big, 10);
 const accounted = tiered.trace.reduce((n, e) => n + (e.omitted ?? 1), 0);
 t("a long chain tiers down to fit and every omitted call is still accounted for", tiered.tiered === true && accounted === 60 && JSON.stringify(tiered).length <= 4000, `${JSON.stringify(tiered).length} chars, ${accounted} steps accounted`);
+
+// Real Claude Code batches independent calls and the agent runs interp.mjs through Bash. Both are traps.
+run("hook.mjs", [], payload("Bash", { stdout: "s1 interp_hash abc\n" }, { command: "node /x/claude-code-trace/interp.mjs --decision d --because b" }));
+t("the hook does not trace the agent's own interp.mjs call", readChain(SID).filter((r) => r.type === "link").length === 3);
+run("hook.mjs", [], payload("Bash", { stdout: "parallel a\n" }));
+run("hook.mjs", [], payload("Bash", { stdout: "parallel b\n" }));
+run("interp.mjs", ["--step", "s4", "--relied-on", "tool=Bash,field=stdout", "--decision", "d", "--because", "relied on the first of two parallel calls"]);
+const named = readChain(SID).filter((r) => r.type === "interp").pop();
+t("--step binds to a named earlier step, not the newest link (parallel tool calls)", named.step_id === "s4" && named.interp.relied_on[0].value_hash === sha('"parallel a\\n"'), named.step_id);
+t("the chain with a parallel batch and a named interpretation still verifies", verifyChain(readChain(SID), pem).length === 0, verifyChain(readChain(SID), pem).join("; "));
 
 rmSync(HOME, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
