@@ -117,3 +117,8 @@ ALTER TABLE receipts ALTER COLUMN self_observable DROP NOT NULL;
 -- agent may never have made. This statement is a no-op once the column is nullable and callers write
 -- NULL for absence, but migrate.ts replays this whole file: it must never widen to touch new rows.
 UPDATE receipts SET self_observable = NULL WHERE self_observable = false AND committed_at < timestamptz '2026-09-16T22:00:00Z';
+-- One row IS recoverable: kpt_5wxjlmntu6 was committed with an explicit `self_observable: false`
+-- (its ClawHub half is a genuine third-party source), recorded in the run log at the time. Put the
+-- agent's own word back rather than leave it reading `undeclared`. No verdict changes: it carries a
+-- typed observes whose credential is not its owner.
+UPDATE receipts SET self_observable = false WHERE id = 'kpt_5wxjlmntu6' AND self_observable IS NULL;
