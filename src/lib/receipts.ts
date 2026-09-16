@@ -25,31 +25,64 @@ export const RANK_MIN = 5;
 export const DEFAULT_TTL = 24 * 3600;
 export const MAX_TTL = 30 * 24 * 3600;
 
-export const EXPIRES_IN_UNIT = `expires_in is a duration in SECONDS (min 60, max ${MAX_TTL} = 30 days). An ISO-8601 instant such as "2026-09-19T14:00:00Z" is also accepted and converted. It is sealed into the receipt and cannot be amended afterwards, so a value that is not understood is rejected, never silently defaulted or clamped.`;
+export const EXPIRES_IN_UNIT = `expires_in is a duration in SECONDS (min 60, max ${MAX_TTL} = 30 days). A fully-qualified ISO-8601 instant such as "2026-09-19T14:00:00.250Z" or "2026-09-19T19:30:00+05:30" is also accepted and sealed to the exact millisecond named. An ISO string with NO timezone offset names no instant and is rejected: the ledger will not guess a zone. It is sealed into the receipt and cannot be amended afterwards, so a value that is not understood is rejected, never silently defaulted, clamped or truncated.`;
 
-/** Parse the caller's expires_in. Returns seconds, or undefined to mean "use the default".
+/** What the caller asked for, once understood. `default` and `seconds` are durations measured from
+ *  commit time; `instant` is an absolute moment the caller named, carried as epoch milliseconds so it
+ *  is sealed exactly rather than rounded into a whole-second duration. */
+export type ExpiresIn = { kind: "default" } | { kind: "seconds"; seconds: number } | { kind: "instant"; atMs: number };
+export const DEFAULT_EXPIRES_IN: ExpiresIn = { kind: "default" };
+export const secondsExpiresIn = (seconds: number): ExpiresIn => ({ kind: "seconds", seconds });
+
+/** A fully-qualified ISO-8601 instant: date, time, and an EXPLICIT offset (Z, +HH:MM or +HHMM). */
+const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?(Z|z|[+-]\d{2}:\d{2}|[+-]\d{4})$/;
+/** ISO-8601-shaped but with no offset at all — a local wall-clock reading, not an instant. Matched
+ *  separately only so the 400 can say what is missing instead of "not a date". */
+const ISO_NO_OFFSET = /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?$/;
+
+/** Parse the caller's expires_in. Returns a duration or an absolute instant, or `default`.
  *  Rejects rather than substitutes: this value becomes a sealed deadline the agent cannot amend,
  *  and a receipt whose expiry is not the one its author asked for cannot be honestly resolved.
  *  (This function exists because `Number(v) || DEFAULT_TTL` silently turned an ISO date string
- *  into a 24h expiry, and Math.min/Math.max silently clamped out-of-range durations.) */
-export function parseExpiresIn(v: unknown): { ok: true; value: number | undefined } | { ok: false; error: string } {
-  if (v === undefined || v === null) return { ok: true, value: undefined };
+ *  into a 24h expiry, and Math.min/Math.max silently clamped out-of-range durations. It rejects
+ *  offset-less ISO strings and returns absolute milliseconds because the first version of the fix
+ *  still read a zone-less string in the server's local zone and still floored an accepted instant
+ *  into whole seconds of duration, sealing up to 1s early.)
+ *  NOTE: `null` and an omitted key are deliberately the same path — "no value" either way. A caller
+ *  whose upstream produced nothing therefore receives the default, not a 400. */
+export function parseExpiresIn(v: unknown): { ok: true; value: ExpiresIn } | { ok: false; error: string } {
+  if (v === undefined || v === null) return { ok: true, value: DEFAULT_EXPIRES_IN };
   if (typeof v === "number" || (typeof v === "string" && /^\d+(\.\d+)?$/.test(v.trim()))) {
     const n = Number(v);
     if (!Number.isFinite(n)) return { ok: false, error: `expires_in must be a finite number. ${EXPIRES_IN_UNIT}` };
     if (n < 60) return { ok: false, error: `expires_in ${n} is under the 60s minimum. ${EXPIRES_IN_UNIT}` };
     if (n > MAX_TTL) return { ok: false, error: `expires_in ${n} is over the ${MAX_TTL}s maximum. ${EXPIRES_IN_UNIT}` };
-    return { ok: true, value: Math.floor(n) };
+    return { ok: true, value: { kind: "seconds", seconds: Math.floor(n) } };
   }
   if (typeof v === "string") {
-    const t = Date.parse(v.trim());
-    if (Number.isNaN(t)) return { ok: false, error: `expires_in ${JSON.stringify(v)} is neither a number of seconds nor an ISO-8601 instant. ${EXPIRES_IN_UNIT}` };
-    const secs = Math.floor((t - Date.now()) / 1000);
-    if (secs < 60) return { ok: false, error: `expires_in ${JSON.stringify(v)} is in the past or less than 60s away. ${EXPIRES_IN_UNIT}` };
-    if (secs > MAX_TTL) return { ok: false, error: `expires_in ${JSON.stringify(v)} is more than 30 days away. ${EXPIRES_IN_UNIT}` };
-    return { ok: true, value: secs };
+    const raw = v.trim();
+    const m = ISO_INSTANT.exec(raw);
+    if (!m) {
+      if (ISO_NO_OFFSET.test(raw))
+        return { ok: false, error: `expires_in ${JSON.stringify(raw)} has no timezone offset, so it names no instant — the same string would seal a different moment on a differently-configured server. Add Z or an offset such as +05:30. ${EXPIRES_IN_UNIT}` };
+      return { ok: false, error: `expires_in ${JSON.stringify(raw)} is neither a number of seconds nor a fully-qualified ISO-8601 instant. ${EXPIRES_IN_UNIT}` };
+    }
+    const [, date, hh, mm, ss, frac, offRaw] = m;
+    // Sub-millisecond digits are dropped by any JS Date, so accept them only when they are lossless.
+    if (frac && frac.length > 3 && /[^0]/.test(frac.slice(3)))
+      return { ok: false, error: `expires_in ${JSON.stringify(raw)} carries sub-millisecond precision (.${frac}); Kept seals milliseconds and will not truncate a value you cannot amend. Round it to at most 3 fractional digits. ${EXPIRES_IN_UNIT}` };
+    const ms = (frac ?? "").slice(0, 3).padEnd(3, "0");
+    const off = offRaw.toUpperCase() === "Z" ? "Z" : offRaw.length === 5 ? `${offRaw.slice(0, 3)}:${offRaw.slice(3)}` : offRaw;
+    if (off !== "Z" && (Number(off.slice(1, 3)) > 23 || Number(off.slice(4, 6)) > 59))
+      return { ok: false, error: `expires_in ${JSON.stringify(raw)} has an out-of-range timezone offset. ${EXPIRES_IN_UNIT}` };
+    const atMs = Date.parse(`${date}T${hh}:${mm}:${ss ?? "00"}.${ms}${off}`);
+    if (!Number.isFinite(atMs)) return { ok: false, error: `expires_in ${JSON.stringify(raw)} is not a real date. ${EXPIRES_IN_UNIT}` };
+    const away = atMs - Date.now();
+    if (away < 60_000) return { ok: false, error: `expires_in ${JSON.stringify(raw)} is in the past or less than 60s away. ${EXPIRES_IN_UNIT}` };
+    if (away > MAX_TTL * 1000) return { ok: false, error: `expires_in ${JSON.stringify(raw)} is more than 30 days away. ${EXPIRES_IN_UNIT}` };
+    return { ok: true, value: { kind: "instant", atMs } };
   }
-  return { ok: false, error: `expires_in must be a number of seconds or an ISO-8601 string. ${EXPIRES_IN_UNIT}` };
+  return { ok: false, error: `expires_in must be a number of seconds or a fully-qualified ISO-8601 string. ${EXPIRES_IN_UNIT}` };
 }
 
 /** observes: the coverage boundary the check actually sees. Accepted either as a plain sentence or as
@@ -97,14 +130,20 @@ export function selfObservable(r: Receipt): { self_observable: boolean; reason: 
   return { self_observable: false, reason: null };
 }
 
-export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; self_observable?: boolean }) {
-  const committed_at = new Date().toISOString();
+export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: ExpiresIn; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; self_observable?: boolean }) {
+  // ONE clock read for both sealed timestamps: a second Date.now() below used to add its own drift
+  // on top of the truncation, so expires_at was neither the instant asked for nor committed_at + ttl.
+  const now = new Date();
+  const committed_at = now.toISOString();
   // Never silently substitute a deadline: callers validate with parseExpiresIn and return 400.
   // If an unvalidated value reaches here we throw rather than seal an expiry nobody asked for.
-  const p = parseExpiresIn(input.expires_in);
-  if (!p.ok) throw new Error(p.error);
-  const ttl = p.value ?? DEFAULT_TTL;
-  const expires_at = new Date(Date.now() + ttl * 1000).toISOString();
+  const e = input.expires_in ?? DEFAULT_EXPIRES_IN;
+  if (typeof e !== "object" || e === null || !("kind" in e))
+    throw new Error("expires_in must be validated with parseExpiresIn before createReceipt; an unparsed value would seal an expiry nobody asked for");
+  // An instant is sealed exactly as named, to the millisecond. Only a duration is measured from now.
+  const expires_at = e.kind === "instant"
+    ? new Date(e.atMs).toISOString()
+    : new Date(now.getTime() + (e.kind === "seconds" ? e.seconds : DEFAULT_TTL) * 1000).toISOString();
   const id = newId("kpt");
   const nonce = newNonce();
   const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? clampPrior(input.confidence) : null;
