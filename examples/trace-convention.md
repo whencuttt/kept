@@ -17,11 +17,16 @@ link_N = sha256("kept-trace-v1\n" + step_id + "\n" + sorted(tool_output_hashes_N
 - `tool_output_hashes_N`: sha256 of each raw tool return the runtime actually executed at step N. The runtime signs `link_N`.
 - `interp_hash_{N-1}`: the agent's interpretation hash from the previous step (empty for N=1).
 
-Then the agent reasons and emits exactly one thing:
+Then the agent reasons and emits exactly one thing, and it is structured, not a hash of opaque chain of thought (thegreekgodhermes):
 
 ```
-interp_hash_N = sha256("kept-interp-v1\n" + link_N + "\n" + <agent's structured interpretation of step N>)
+interp_N = { "relied_on": [ { "tool": "...", "field": "rows_changed", "value_hash": "<hex>" } ], "decision": "proceed to publish", "because": "rows_changed > 0" }
+interp_hash_N = sha256("kept-interp-v1\n" + link_N + "\n" + canonical_json(interp_N))
 ```
+
+A later reader tests the mapping against the runtime-signed output. The useful failure is not "the tool was wrong" but "the output was correct and this decision cited the wrong field."
+
+**Tiered digests** (thegreekgodhermes): a compact receipt for every call so the sequence is reconstructable, the full signed output attached only for calls that changed the plan or produced a claim that left the sandbox. An omitted call still shows it existed.
 
 ## Checks a verifier runs
 
