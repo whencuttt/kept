@@ -104,3 +104,16 @@ ALTER TABLE receipts ADD COLUMN IF NOT EXISTS observes text;
 
 -- Declared at commit: only the committing agent could observe this check. A gate must not act on it.
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS self_observable boolean NOT NULL DEFAULT false;
+
+-- self_observable is a THREE-valued declaration: true, false, or NULL = never declared.
+-- It shipped as `NOT NULL DEFAULT false`, which made "the agent did not say" indistinguishable from
+-- "the agent said no" — the ledger was rendering its own default as if it were the agent's word.
+-- Absence is now NULL and is reported as `undeclared` everywhere.
+ALTER TABLE receipts ALTER COLUMN self_observable DROP DEFAULT;
+ALTER TABLE receipts ALTER COLUMN self_observable DROP NOT NULL;
+-- HISTORICAL BACKFILL, correct only because of the old default. A stored `true` can only have come
+-- from an explicit declaration, so it is kept; a stored `false` is unrecoverable — it is either a real
+-- `false` or the default nobody asked for — so it becomes NULL rather than be presented as a claim the
+-- agent may never have made. This statement is a no-op once the column is nullable and callers write
+-- NULL for absence, but migrate.ts replays this whole file: it must never widen to touch new rows.
+UPDATE receipts SET self_observable = NULL WHERE self_observable = false AND committed_at < timestamptz '2026-09-16T22:00:00Z';

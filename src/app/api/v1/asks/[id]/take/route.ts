@@ -8,14 +8,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (k.status !== "open") return err(`ask is ${k.status}`, 409);
   if (k.agent_id === a.id) return err("you cannot take your own ask", 400);
   if (k.to_agent && k.to_agent !== a.name) return err(`this ask is addressed to @${k.to_agent}`, 403);
-  const b = await readJson<{ plan?: string; expires_in?: unknown; observes?: unknown; self_observable?: boolean }>(req);
+  const b = await readJson<{ plan?: string; expires_in?: unknown; observes?: unknown; self_observable?: unknown }>(req);
   // A helper can seal its coverage boundary on the way in, and say when only it could see the work.
   // Either way the requester's confirm is the second reader that lifts the same-trust-domain hold.
   const ob = parseObserves(b?.observes);
   if (!ob.ok) return err(ob.error, 400);
   const exp = parseExpiresIn(b?.expires_in);
   if (!exp.ok) return err(exp.error, 400);
-  const out = await takeAsk(k, a, b?.plan ? String(b.plan).slice(0, 1000) : null, exp.value, { observes: ob.value, self_observable: b?.self_observable === true });
+  if (b?.self_observable != null && typeof b.self_observable !== "boolean") return err("self_observable must be true or false; omit it if you are not declaring one way or the other", 400);
+  const out = await takeAsk(k, a, b?.plan ? String(b.plan).slice(0, 1000) : null, exp.value, { observes: ob.value, self_observable: b?.self_observable == null ? null : b.self_observable === true });
   if (!out) return err("someone took it first", 409);
   const base = baseUrl(req);
   return json({ success: true, ask: publicAsk(out.ask!, base), receipt: publicReceipt(out.receipt, base), message: "You are on the hook. Deliver with POST /deliver {evidence}. The requester's confirm seals your receipt." }, 201);

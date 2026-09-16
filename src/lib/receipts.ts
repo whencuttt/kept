@@ -3,7 +3,7 @@ import { canonicalObserves, commitPreimage, commitPreimageVersion, evidencePreim
 
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
-  confidence: number | null; self_controlled: boolean; observes: string | null; self_observable: boolean; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
+  confidence: number | null; self_controlled: boolean; observes: string | null; /** true | false | null = the agent never declared it. A default is not a declaration. */ self_observable: boolean | null; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
   outcome: string | null; evidence: unknown; evidence_raw: string | null; evidence_hash: string | null; revealed_at: string | null;
   seq: number | null; prev_seal: string | null; seal_hash: string | null; seal_sig: string | null;
 };
@@ -13,7 +13,7 @@ const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : d == null ? n
 function norm(r: Record<string, unknown>): Receipt {
   const raw = (r.evidence as string | null) ?? null;
   let parsed: unknown = null; if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
-  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, observes: (r.observes as string | null) ?? null, self_observable: r.self_observable === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
+  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, observes: (r.observes as string | null) ?? null, self_observable: r.self_observable == null ? null : r.self_observable === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
 }
 
 export const MAX_TEXT = 600;
@@ -116,10 +116,26 @@ export function parseObserves(raw: unknown): ObservesResult {
 
 /** A credential that is the receipt's own agent, or a word meaning "me". */
 const SELF_CREDENTIALS = new Set(["self", "me", "my", "mine", "own", "owner", "itself", "this agent", "same agent", "the agent", "the worker", "the job", "the job itself"]);
+/** The state of the two coverage fields as the agent actually left them. `self_observable` is
+ *  three-valued because a stored `false` used to mean either "the agent said no" or "the agent said
+ *  nothing"; only `true` and an explicit `false` are declarations. */
+export type CoverageState = { observes: "declared" | "undeclared"; self_observable: "true" | "false" | "undeclared" };
+export const coverageState = (r: Receipt): CoverageState => ({
+  observes: r.observes ? "declared" : "undeclared",
+  self_observable: r.self_observable == null ? "undeclared" : r.self_observable ? "true" : "false",
+});
+
 /** The same-trust-domain rule. A check only the committing agent could see is not independently
  *  observable, so a gate must not act on it: the verdict reads unresolved until a second reader confirms.
- *  Three ways in — the agent declared it, the sealed observes names the agent's own credential, or no
- *  boundary was sealed at all on a receipt the agent alone controls. */
+ *  Three ways in — the sealed observes names the agent's own credential, the agent declared it, or no
+ *  observes boundary was sealed at all.
+ *
+ *  That last branch used to require `self_controlled` as well, which meant the cheapest possible
+ *  receipt — no boundary, nothing said about who could see it — gated as `verified`. Saying nothing
+ *  about coverage now costs the same as saying the coverage was your own: an undeclared boundary is an
+ *  unknown boundary, and an unknown boundary cannot be shown to lie outside the committing agent.
+ *  Fail closed, and `self_observable: false` on its own does not open it — only a declared `observes`
+ *  or a second reader does. */
 export function selfObservable(r: Receipt): { self_observable: boolean; reason: string | null } {
   const cred = observesCredential(r.observes);
   const owned = cred != null && (() => {
@@ -127,12 +143,12 @@ export function selfObservable(r: Receipt): { self_observable: boolean; reason: 
     return n === r.agent_name.toLowerCase() || SELF_CREDENTIALS.has(n);
   })();
   if (owned) return { self_observable: true, reason: `same-trust-domain rule: observes.credential is "${cred}", the receipt's own agent, so observer and subject are the same party` };
-  if (r.self_observable) return { self_observable: true, reason: "same-trust-domain rule: the agent declared self_observable at commit, so only the committing agent could see the check" };
-  if (!r.observes && r.self_controlled) return { self_observable: true, reason: "same-trust-domain rule: no observes boundary was sealed and the receipt is self_controlled, so nothing outside the committing agent could see the check" };
+  if (r.self_observable === true) return { self_observable: true, reason: "same-trust-domain rule: the agent declared self_observable at commit, so only the committing agent could see the check" };
+  if (!r.observes) return { self_observable: true, reason: "no observes declared: coverage boundary unknown, treated as self-observable" };
   return { self_observable: false, reason: null };
 }
 
-export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: ExpiresIn; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; self_observable?: boolean }) {
+export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: ExpiresIn; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; /** true, false, or null/undefined for "the agent did not say" — stored as NULL, never coerced to false. */ self_observable?: boolean | null }) {
   // ONE clock read for both sealed timestamps: a second Date.now() below used to add its own drift
   // on top of the truncation, so expires_at was neither the instant asked for nor committed_at + ttl.
   const now = new Date();
@@ -151,7 +167,8 @@ export async function createReceipt(agent: { id: string; name: string }, input: 
   const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? clampPrior(input.confidence) : null;
   const self_controlled = input.self_controlled === true;
   const observes = input.observes ?? null;
-  const self_observable = input.self_observable === true;
+  // Absence is NULL, not false: the ledger must not record a declaration the agent never made.
+  const self_observable = input.self_observable == null ? null : input.self_observable === true;
   const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence, observes }));
   const commit_sig = signHex(commit_hash);
   const tags = (input.tags ?? []).map((t) => String(t).toLowerCase().slice(0, 32)).slice(0, 8);
@@ -265,7 +282,10 @@ export async function leaderboard(limit = 10) {
 }
 export const publicReceipt = (r: Receipt, base: string) => ({
   id: r.id, url: `${base}/r/${r.id}`, agent: r.agent_name, agent_url: `${base}/a/${r.agent_name}`,
-  claim: r.claim, check: r.check, observes: r.observes, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled, self_observable: selfObservable(r).self_observable, self_observable_declared: r.self_observable, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
+  claim: r.claim, check: r.check, observes: r.observes, observes_state: coverageState(r).observes, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled,
+  // `self_observable` is the DERIVED effective value a gate acts on; `self_observable_declared` is what
+  // the agent actually said — "undeclared" when it said nothing, never a default rendered as a claim.
+  self_observable: selfObservable(r).self_observable, self_observable_declared: coverageState(r).self_observable, self_observable_reason: selfObservable(r).reason, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
   outcome: r.outcome, evidence: r.evidence, revealed_at: r.revealed_at,
   proof: { nonce: r.nonce, commit_preimage_version: commitPreimageVersion(r), commit_hash: r.commit_hash, commit_sig: r.commit_sig, seq: r.seq, prev_seal: r.prev_seal, evidence_hash: r.evidence_hash, seal_hash: r.seal_hash, seal_sig: r.seal_sig, verify_url: `${base}/api/v1/verify/${r.id}`, public_key_url: `${base}/.well-known/kept.json` },
   badge_markdown: `[${r.status === "open" ? "🧾 committed" : r.status === "kept" ? "✅ kept" : r.status === "failed" ? "❌ failed" : `⏳ ${r.status}`}: ${r.claim.slice(0, 80)}](${base}/r/${r.id})`,
