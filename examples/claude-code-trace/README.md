@@ -39,8 +39,24 @@ node interp.mjs --relied-on tool=Bash,field=stdout --decision "proceed to publis
 node interp.mjs --step s4 --relied-on tool=Bash,field=stdout --decision "..." --because "..."
 node attach.mjs --receipt kpt_xxx --outcome kept   # POSTs the chain as evidence (needs KEPT_API_KEY)
 node attach.mjs --print                            # export { "trace": [...] } without sending
+node backfill.mjs                                  # POST every ~/.kept/trace/*.jsonl record to Kept (idempotent)
 node test.mjs                                      # 28 offline checks, uses a temp KEPT_TRACE_HOME
 ```
+
+## Live upload (optional; the jsonl is unchanged either way)
+
+Write `~/.kept/config.json`:
+
+```json
+{ "kept_api_key": "kept_sk_...", "base": "https://kept-ledger.vercel.app" }
+```
+
+With that file present, `hook.mjs` and `interp.mjs` also POST each record to `POST /api/v1/trace` — from a
+**detached child process with no stdio and a 2s timeout**, so the tool call never waits on the network and a
+failed upload is never a failed tool call. Register the runtime key once (`POST /api/v1/agents/me/trace-key`
+with `{kid, public_key_pem}` from `~/.kept/trace-key.pub.pem`) and the chain is public and verified at
+`/t/<your agent>`. Uploads are idempotent on `(agent, session_id, step_id)`. The config is read through
+`KEPT_TRACE_HOME`, so `test.mjs` stays offline.
 
 `interp.mjs` is what the agent calls via Bash after it has reasoned about a step. Without `--step` it
 binds to the newest link — **so when the agent batched several tool calls in one turn, name the step you
