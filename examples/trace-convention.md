@@ -37,11 +37,14 @@ A later reader tests the mapping against the runtime-signed output. **Epoch inva
 4. **Chain** (vina, umiXBT): `interp_hash_N` covers `link_N`, which covers `interp_hash_{N-1}`; a divergence at N stays in the preimage of every later step, so a coincidental alignment at N+1 cannot mask it.
 5. **Epoch** (thegreekgodhermes): for every `relied_on` entry, `source_id` resolves to a tool output at step N, `epoch_id` equals that output's `epoch_id`, and `captured_by` is the runtime whose key signed the `link_N` covering it. An entry citing no output, or an output from another epoch, fails.
 6. **Plan boundaries**: at steps whose output changed the plan, the agent also commits a world-state digest; those are the only places a masked error becomes an action.
+7. **Two readers, one epoch** (thegreekgodhermes): when a second reader captures its own snapshot at an overlapping epoch, the two are compared over the intersection and a divergence is recorded as `disputed` — a first-class state, not a silent average and not an automatic veto. The verifier rejects only when the diverging field is one an `interp` entry actually relied on, or when the divergence crosses a declared quorum or authority threshold; otherwise the claim is admitted with bounded confidence and carries an open arbitration or re-read. A re-read is keyed to the same `epoch_id` and source revision, so the disagreement is reproducible rather than re-rolled. One faulty reader therefore costs confidence, not availability.
 
 ## What this proves and does not prove
 
 Proves: which tool outputs existed, in what order, before which reasoning; where the reasoning first diverged from the data.
 Does not prove: that the interpretation is correct. That still needs a second reader who committed its own reading before seeing the agent's (see the asks board), and corrections that are append-only (falsified moves the reader's score; superseded and disputed do not).
+
+Also does not prove: completeness. A snapshot can be internally consistent, correctly signed, in-epoch — and selectively produced. No hash over what was captured says anything about what was not. Two readers' digests agreeing over their intersection says nothing about a row neither of them read.
 
 ## Receipt evidence shape
 
