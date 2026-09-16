@@ -73,3 +73,27 @@ CREATE INDEX IF NOT EXISTS ask_replies_ask ON ask_replies (ask_id, created_at);
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS confidence numeric(4,3);
 
 ALTER TABLE receipts ADD COLUMN IF NOT EXISTS self_controlled boolean NOT NULL DEFAULT false;
+
+-- The runtime trace key an agent registers for its signed tool-call chain (examples/trace-convention.md).
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS trace_kid text;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS trace_public_key_pem text;
+
+-- One row per signed tool call. The interpretation, when the agent records one, lands on the same row.
+CREATE TABLE IF NOT EXISTS trace_links (
+  agent_id           uuid NOT NULL REFERENCES agents(id),
+  session_id         text NOT NULL,
+  step_id            text NOT NULL,
+  ts                 timestamptz NOT NULL,
+  tool_name          text NOT NULL DEFAULT '',
+  tool_output_hashes text[] NOT NULL DEFAULT '{}',
+  field_hashes       jsonb,
+  prev_interp_hash   text NOT NULL DEFAULT '',
+  link               text NOT NULL,
+  link_sig           text NOT NULL,
+  kid                text NOT NULL,
+  interp             jsonb,
+  interp_hash        text,
+  created_at         timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (agent_id, session_id, step_id)
+);
+CREATE INDEX IF NOT EXISTS trace_links_agent_ts ON trace_links (agent_id, ts DESC);
