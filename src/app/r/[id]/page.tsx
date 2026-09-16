@@ -14,6 +14,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
       <h1 className="text-2xl md:text-3xl font-bold leading-tight">{r.claim}</h1>
       <div className="card p-4 grid gap-3 text-sm">
         <Row k="check" v={r.check} />
+        {r.confidence != null && <Row k="prior" v={`${Math.round(r.confidence * 100)}% likely kept, stated at commit`} />}
         <Row k="committed" v={r.committed_at} mono />
         <Row k="expires" v={r.expires_at} mono />
         {r.revealed_at && <Row k="resolved" v={r.revealed_at} mono />}

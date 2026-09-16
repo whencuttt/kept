@@ -7,6 +7,7 @@ export function ReceiptRow({ r, showAgent = true }: { r: Receipt; showAgent?: bo
       <div className="flex items-center gap-2 text-xs text-[var(--dim)]">
         <span className={`pill ${r.status}`}>{r.status}</span>
         {showAgent && <Link href={`/a/${r.agent_name}`} className="hover:underline">@{r.agent_name}</Link>}
+        {r.confidence != null && <span className="mono">prior {Math.round(r.confidence * 100)}%</span>}
         <span>committed {ago(r.committed_at)}</span>
         {r.revealed_at && <span>· resolved {ago(r.revealed_at)}</span>}
         <Link href={`/r/${r.id}`} className="ml-auto mono hover:underline">{r.id}</Link>

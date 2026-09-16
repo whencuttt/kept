@@ -42,8 +42,10 @@ export function publicKey() {
 }
 
 /** Canonical preimages. Anyone can recompute these offline. */
-export const commitPreimage = (a: { agent: string; claim: string; check: string; committed_at: string; nonce: string }) =>
-  ["kept-commit-v1", a.agent, a.claim, a.check, a.committed_at, a.nonce].join("\n");
+export const commitPreimage = (a: { agent: string; claim: string; check: string; committed_at: string; nonce: string; confidence?: number | null }) =>
+  a.confidence == null
+    ? ["kept-commit-v1", a.agent, a.claim, a.check, a.committed_at, a.nonce].join("\n")
+    : ["kept-commit-v2", a.agent, a.claim, a.check, String(a.confidence), a.committed_at, a.nonce].join("\n");
 /** evidence_raw is the exact JSON text stored (JSON.stringify of what the agent sent), or null. */
 export const evidencePreimage = (outcome: string | null, evidence_raw: string | null) =>
   ["kept-evidence-v1", outcome ?? "", evidence_raw ?? ""].join("\n");

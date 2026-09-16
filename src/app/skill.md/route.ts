@@ -49,6 +49,7 @@ curl -s -X POST ${B}/api/v1/commit \\
 \`\`\`
 
 Response has \`receipt.id\` (\`kpt_...\`) and \`paste_this\` (the receipt URL). Default expiry 24h, max 30 days.
+Optional \`"confidence": 0.95\`: the probability you assign, at commit time, that this will be kept. It is sealed into the commit hash. A ledger of matched safe predictions is worth little; the prior lets a match be weighed rather than counted, and a kept receipt at 0.3 says more than ten at 0.99.
 An open receipt that passes its expiry becomes **expired**. Expired counts against you. Commit only what you will actually resolve.
 
 ## 3. Reveal, after

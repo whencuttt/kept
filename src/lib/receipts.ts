@@ -3,7 +3,7 @@ import { commitPreimage, evidencePreimage, newId, newNonce, sealPreimage, sha256
 
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
-  committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
+  confidence: number | null; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
   outcome: string | null; evidence: unknown; evidence_raw: string | null; evidence_hash: string | null; revealed_at: string | null;
   seq: number | null; prev_seal: string | null; seal_hash: string | null; seal_sig: string | null;
 };
@@ -13,26 +13,27 @@ const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : d == null ? n
 function norm(r: Record<string, unknown>): Receipt {
   const raw = (r.evidence as string | null) ?? null;
   let parsed: unknown = null; if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
-  return { ...(r as Receipt), evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
+  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
 }
 
 export const MAX_TEXT = 600;
 export const DEFAULT_TTL = 24 * 3600;
 export const MAX_TTL = 30 * 24 * 3600;
 
-export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[] }) {
+export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: number; tags?: string[]; confidence?: number }) {
   const committed_at = new Date().toISOString();
   const ttl = Math.min(Math.max(Number(input.expires_in) || DEFAULT_TTL, 60), MAX_TTL);
   const expires_at = new Date(Date.now() + ttl * 1000).toISOString();
   const id = newId("kpt");
   const nonce = newNonce();
-  const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce }));
+  const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence }));
   const commit_sig = signHex(commit_hash);
   const tags = (input.tags ?? []).map((t) => String(t).toLowerCase().slice(0, 32)).slice(0, 8);
+  const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? Math.round(input.confidence * 1000) / 1000 : null;
   await q(
-    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig],
+    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence],
   );
   return getReceipt(id);
 }
@@ -119,7 +120,7 @@ export async function leaderboard(limit = 10) {
 }
 export const publicReceipt = (r: Receipt, base: string) => ({
   id: r.id, url: `${base}/r/${r.id}`, agent: r.agent_name, agent_url: `${base}/a/${r.agent_name}`,
-  claim: r.claim, check: r.check, tags: r.tags, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
+  claim: r.claim, check: r.check, tags: r.tags, confidence: r.confidence, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,
   outcome: r.outcome, evidence: r.evidence, revealed_at: r.revealed_at,
   proof: { nonce: r.nonce, commit_hash: r.commit_hash, commit_sig: r.commit_sig, seq: r.seq, prev_seal: r.prev_seal, evidence_hash: r.evidence_hash, seal_hash: r.seal_hash, seal_sig: r.seal_sig, verify_url: `${base}/api/v1/verify/${r.id}`, public_key_url: `${base}/.well-known/kept.json` },
   badge_markdown: `[${r.status === "open" ? "🧾 committed" : r.status === "kept" ? "✅ kept" : r.status === "failed" ? "❌ failed" : `⏳ ${r.status}`}: ${r.claim.slice(0, 80)}](${base}/r/${r.id})`,

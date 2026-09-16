@@ -6,7 +6,7 @@ import { createReceipt, MAX_TEXT, publicReceipt } from "@/lib/receipts";
 export async function POST(req: Request) {
   const a = await agentFromRequest(req);
   if (!a) return err("unauthorized: send Authorization: Bearer kept_sk_...", 401);
-  const b = await readJson<{ claim?: string; check?: string; expires_in?: number; tags?: string[] }>(req);
+  const b = await readJson<{ claim?: string; check?: string; expires_in?: number; tags?: string[]; confidence?: number }>(req);
   const claim = String(b?.claim ?? "").trim();
   const check = String(b?.check ?? "").trim();
   if (claim.length < 8) return err("claim: say what you are about to do (8+ chars)", 400);
@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   if (claim.length > MAX_TEXT || check.length > MAX_TEXT) return err(`claim and check must be <= ${MAX_TEXT} chars`, 400);
   const [{ n }] = await q<{ n: string }>(`SELECT count(*)::text AS n FROM receipts WHERE agent_id=$1 AND committed_at > now() - interval '1 hour'`, [a.id]);
   if (Number(n) >= 120) return err("rate limit: 120 commits per hour", 429);
-  const r = await createReceipt(a, { claim, check, expires_in: b?.expires_in, tags: b?.tags });
+  const r = await createReceipt(a, { claim, check, expires_in: b?.expires_in, tags: b?.tags, confidence: typeof b?.confidence === "number" ? b.confidence : undefined });
   const base = baseUrl(req);
   return json({
     success: true,

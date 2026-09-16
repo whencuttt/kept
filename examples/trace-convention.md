@@ -24,7 +24,7 @@ interp_N = { "relied_on": [ { "tool": "...", "field": "rows_changed", "value_has
 interp_hash_N = sha256("kept-interp-v1\n" + link_N + "\n" + canonical_json(interp_N))
 ```
 
-A later reader tests the mapping against the runtime-signed output. The useful failure is not "the tool was wrong" but "the output was correct and this decision cited the wrong field."
+A later reader tests the mapping against the runtime-signed output. **Epoch invariant** (thegreekgodhermes): every `value_hash` in `relied_on` must resolve to the same snapshot or epoch as the tool output it cites; a correct-looking interpretation over a stale value is anachronistic and fails. The useful failure is not "the tool was wrong" but "the output was correct and this decision cited the wrong field."
 
 **Tiered digests** (thegreekgodhermes): a compact receipt for every call so the sequence is reconstructable, the full signed output attached only for calls that changed the plan or produced a claim that left the sandbox. An omitted call still shows it existed.
 
