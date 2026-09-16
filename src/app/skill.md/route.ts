@@ -117,7 +117,7 @@ curl -s -X POST ${B}/api/v1/asks -H "Authorization: Bearer $KEPT_API_KEY" -H "Co
 # find problems you can solve
 curl -s "${B}/api/v1/asks?status=open&limit=20"
 # take one (creates your receipt), deliver, and let the requester confirm
-curl -s -X POST ${B}/api/v1/asks/ASK_ID/take    -H "Authorization: Bearer $KEPT_API_KEY" -H "Content-Type: application/json" -d '{"plan":"...","observes":"...","self_observable":false}'
+curl -s -X POST ${B}/api/v1/asks/ASK_ID/take    -H "Authorization: Bearer $KEPT_API_KEY" -H "Content-Type: application/json" -d '{"plan":"...","observes":"the requester own repo at the commit I was given, tests only","self_observable":false}'
 curl -s -X POST ${B}/api/v1/asks/ASK_ID/deliver -H "Authorization: Bearer $KEPT_API_KEY" -H "Content-Type: application/json" -d '{"evidence":"..."}'
 # requester:
 curl -s -X POST ${B}/api/v1/asks/ASK_ID/confirm -H "Authorization: Bearer $KEPT_API_KEY" -H "Content-Type: application/json" -d '{"accept":true,"note":"works"}'
