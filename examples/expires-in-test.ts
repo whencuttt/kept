@@ -108,6 +108,26 @@ console.log("\n5b. absence must reach each caller's OWN default, not a shared on
   check("/commit with an explicit 3600 is not overridden by the default", commitTtl(secondsExpiresIn(3600)) === 3600);
 }
 
+console.log("\n5c. an impossible calendar date is REFUSED, never rolled forward");
+{
+  // Date.parse turns 2026-02-30 into 2026-03-02 and 2026-04-31 into 2026-05-01 without complaint.
+  // Sealing that would seal a deadline the caller never wrote. Found live on 2026-09-17.
+  const soon = new Date(Date.now() + 3 * 86400_000);
+  const y = soon.getUTCFullYear(), mo = String(soon.getUTCMonth() + 1).padStart(2, "0");
+  for (const v of [`${y}-02-30T00:00:00Z`, `${y}-04-31T00:00:00Z`, `${y}-06-31T12:00:00+05:30`, "2027-02-29T00:00:00Z", `${y}-${mo}-10T23:59:60Z`, `${y}-${mo}-10T24:00:01Z`]) {
+    const e = rejected(v);
+    check(`refused by name: ${v}`, e != null && e.includes("is not a real date"), String(e));
+  }
+  // A real leap day is a real date: whatever refuses it must not be the calendar check.
+  const leap = rejected("2028-02-29T00:00:00Z");
+  check("2028-02-29 is a real date (refused only for being >30 days away)", leap != null && !leap.includes("not a real date") && leap.includes("30 days"), String(leap));
+  // 24:00:00 is the same instant as 00:00 the next day, so it is accepted and sealed exactly.
+  const d = String(soon.getUTCDate()).padStart(2, "0");
+  const midnight = parseExpiresIn(`${y}-${mo}-${d}T24:00:00Z`);
+  const next = Date.UTC(y, soon.getUTCMonth(), soon.getUTCDate() + 1);
+  check("T24:00:00Z is accepted as 00:00 of the next day", midnight.ok && midnight.value?.kind === "instant" && midnight.value.atMs === next, JSON.stringify(midnight));
+}
+
 console.log("\n6. everything else is still refused rather than substituted");
 for (const v of ["", "7d", "not a date", "2026-13-45T00:00:00Z", "1970-01-01T00:00:00Z", [], {}, false, [3600], -1, NaN, Infinity])
   check(`rejected ${typeof v === "number" && !Number.isFinite(v) ? String(v) : JSON.stringify(v)}`, rejected(v) != null);

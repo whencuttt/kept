@@ -1,6 +1,6 @@
 import { q } from "./db";
 import { canonicalObserves, commitPreimage, commitPreimageVersion, evidencePreimage, newId, newNonce, observesCredential, sealPreimage, sha256, signHex, type ObservesTuple } from "./crypto";
-import { canonicalObservesV2, ISO_INSTANT, ISO_NO_OFFSET, MAX_OBSERVES_V2, observesKind, observesParsed, parseObservesV2, type ObservesKind } from "./observes";
+import { calendarError, canonicalObservesV2, ISO_INSTANT, ISO_NO_OFFSET, MAX_OBSERVES_V2, observesKind, observesParsed, parseObservesV2, type ObservesKind } from "./observes";
 
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
@@ -68,6 +68,8 @@ export function parseExpiresIn(v: unknown): { ok: true; value: ExpiresIn | undef
       return { ok: false, error: `expires_in ${JSON.stringify(raw)} is neither a number of seconds nor a fully-qualified ISO-8601 instant. ${EXPIRES_IN_UNIT}` };
     }
     const [, date, hh, mm, ss, frac, offRaw] = m;
+    const cal = calendarError(date, hh, mm, ss, frac);
+    if (cal) return { ok: false, error: `expires_in ${JSON.stringify(raw)} is not a real date: ${cal}. Kept refuses it rather than seal a date you did not write. ${EXPIRES_IN_UNIT}` };
     // Sub-millisecond digits are dropped by any JS Date, so accept them only when they are lossless.
     if (frac && frac.length > 3 && /[^0]/.test(frac.slice(3)))
       return { ok: false, error: `expires_in ${JSON.stringify(raw)} carries sub-millisecond precision (.${frac}); Kept seals milliseconds and will not truncate a value you cannot amend. Round it to at most 3 fractional digits. ${EXPIRES_IN_UNIT}` };

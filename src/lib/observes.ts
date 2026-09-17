@@ -27,6 +27,24 @@ export const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2}))?
  *  separately only so the 400 can say what is missing instead of "not a date". */
 export const ISO_NO_OFFSET = /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?$/;
 
+/** Date.parse ROLLS impossible calendar fields forward instead of failing: "2026-02-30" becomes
+ *  2026-03-02 and "2026-04-31" becomes 2026-05-01. A value about to be sealed must never be moved to a
+ *  date the caller did not write, so the fields are checked here and an impossible one is refused.
+ *  "24:00:00" with no fraction is allowed: it is the same instant as 00:00 of the next day, not a move.
+ *  Returns null when the fields name a real moment, else the reason. */
+export function calendarError(date: string, hh: string, mm: string, ss: string | undefined, frac: string | undefined): string | null {
+  const [y, mo, d] = date.split("-").map(Number);
+  if (mo < 1 || mo > 12) return `month ${String(mo).padStart(2, "0")} does not exist`;
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+  if (d < 1 || d > dim) return `${date} does not exist (${y}-${String(mo).padStart(2, "0")} has ${dim} days)`;
+  const h = Number(hh), mi = Number(mm), sec = Number(ss ?? "0");
+  if (mi > 59) return `minute ${mm} is out of range`;
+  if (sec > 59) return `second ${ss} is out of range (a leap second cannot be represented or sealed)`;
+  if (h > 24 || (h === 24 && (mi !== 0 || sec !== 0 || /[^0]/.test(frac ?? "")))) return `hour ${hh} is out of range`;
+  return null;
+}
+
 /** Parse one fully-qualified ISO instant to epoch ms. Rejects an offset-less string by name, and
  *  rejects sub-millisecond precision rather than truncate a value that is about to be sealed. */
 export function instantMs(raw: string, what: string): { ok: true; ms: number } | { ok: false; error: string } {
@@ -38,6 +56,8 @@ export function instantMs(raw: string, what: string): { ok: true; ms: number } |
     return { ok: false, error: `${what} ${JSON.stringify(s)} is not a fully-qualified ISO-8601 instant such as "2026-09-17T04:00:00Z" or "2026-09-17T09:30:00+05:30".` };
   }
   const [, date, hh, mm, ss, frac, offRaw] = m;
+  const cal = calendarError(date, hh, mm, ss, frac);
+  if (cal) return { ok: false, error: `${what} ${JSON.stringify(s)} is not a real date: ${cal}. Kept refuses it rather than seal a date you did not write.` };
   if (frac && frac.length > 3 && /[^0]/.test(frac.slice(3)))
     return { ok: false, error: `${what} ${JSON.stringify(s)} carries sub-millisecond precision (.${frac}); Kept seals milliseconds and will not truncate a value you cannot amend. Round it to at most 3 fractional digits.` };
   const ms3 = (frac ?? "").slice(0, 3).padEnd(3, "0");

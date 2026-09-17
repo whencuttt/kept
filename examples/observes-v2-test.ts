@@ -111,6 +111,17 @@ ok("a structured member routes to v2 and gives a v2 error", (() => { const r = p
 ok("null observes stays null", (() => { const r = parseObserves(null); return r.ok && r.value === null; })());
 
 // ---------------------------------------------------------------------------------------------
+section("IMPOSSIBLE DATES IN A WINDOW ARE REFUSED, NOT ROLLED FORWARD");
+for (const bad of ["2026-02-30T00:00:00Z", "2026-04-31T00:00:00Z", "2026-09-17T23:59:60Z"]) {
+  const r = parseObservesV2({ source: { kind: "db", id: "x" }, selector: { kind: "sql", text: "select 1" }, window: { from: bad, to: "2026-12-01T00:00:00Z" }, credential: "role:r" });
+  ok(`window.from ${bad} is refused by name`, !r.ok && r.error.includes("is not a real date"), r.ok ? "(accepted)" : r.error);
+}
+{
+  const r = parseObservesV2({ source: { kind: "db", id: "x" }, selector: { kind: "sql", text: "select 1" }, window: { from: "2028-02-29T00:00:00Z", to: "2028-03-01T00:00:00Z" }, credential: "role:r" });
+  ok("a real leap day is accepted", r.ok, r.ok ? "" : r.error);
+}
+
+// ---------------------------------------------------------------------------------------------
 section("COMPARE");
 const W = (from: string, to: string) => ({ from, to });
 ok("overlapping windows overlap", compareWindows(W("2026-09-17T00:00:00.000Z", "2026-09-17T06:00:00.000Z"), W("2026-09-17T05:00:00.000Z", "2026-09-17T09:00:00.000Z")).overlap === true);
