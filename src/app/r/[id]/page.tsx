@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { coverageState, getReceipt, selfObservable } from "@/lib/receipts";
+import { observesParsed, type ObservesKind } from "@/lib/observes";
 export const dynamic = "force-dynamic";
 export default async function ReceiptPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -16,7 +17,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
       <h1 className="text-2xl md:text-3xl font-bold leading-tight">{r.claim}</h1>
       <div className="card p-4 grid gap-3 text-sm">
         <Row k="check" v={r.check} />
-        <Row k="observes" v={r.observes ?? "undeclared — the coverage boundary this check sees was never stated"} dim={!r.observes} />
+        <Observes observes={r.observes} kind={r.observes_kind} id={r.id} />
         {r.confidence != null && <Row k="prior" v={`${Math.round(r.confidence * 100)}% likely kept, stated at commit`} />}
         <Row k="committed" v={r.committed_at} mono />
         <Row k="expires" v={r.expires_at} mono />
@@ -43,3 +44,43 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
   );
 }
 function Row({ k, v, mono, dim }: { k: string; v: string; mono?: boolean; dim?: boolean }) { return <div className="grid grid-cols-[100px_1fr] gap-2"><div className="text-[var(--dim)]">{k}</div><div className={`${mono ? "mono" : ""}${dim ? " text-[var(--dim)] italic" : ""}`}>{v}</div></div>; }
+
+/** The boundary, rendered as what it IS. A typed_v2 observes is a structure, and showing it as one
+ *  line of canonical JSON would hide exactly the difference the typing exists to expose — if the
+ *  renderer cannot show two receipts apart, the field is decorative (thegreekgodhermes). */
+function Observes({ observes, kind, id }: { observes: string | null; kind: ObservesKind | null; id: string }) {
+  if (!observes) return <Row k="observes" v="undeclared — the coverage boundary this check sees was never stated" dim />;
+  const o = observesParsed(observes, kind);
+  const label = kind === "typed_v2"
+    ? <>typed v2 — <span className="text-[var(--text)]">comparable</span>: an interval and a closed-grammar selector, sealed under <span className="mono">kept-commit-v4</span></>
+    : kind === "typed_v1_untyped_fields"
+      ? <>typed v1 — fields are still prose, so this receipt is <span className="text-[var(--text)]">non-retroactive but not comparable</span></>
+      : <>prose — one sentence, so this receipt is <span className="text-[var(--text)]">non-retroactive but not comparable</span></>;
+  const w = (o?.window ?? null) as { from?: string; to?: string; seconds_before_reveal?: number } | null;
+  const sel = (o?.selector ?? null) as Record<string, unknown> | null;
+  const src = (o?.source ?? null) as { kind?: string; id?: string } | null;
+  return (
+    <div className="grid gap-2">
+      <div className="grid grid-cols-[100px_1fr] gap-2"><div className="text-[var(--dim)]">observes</div>
+        <div className="text-[13px] text-[var(--dim)]"><span className="mono">observes_kind: {kind}</span> · {label}</div></div>
+      {kind === "typed_v2" && o ? (
+        <div className="grid gap-1 pl-[100px] text-[13px]">
+          <Sub k="source" v={`${src?.kind ?? "?"} · ${src?.id ?? "?"}`} />
+          <Sub k="selector" v={Object.entries(sel ?? {}).filter(([k]) => k !== "kind").map(([k, v]) => `${k}=${String(v)}`).join("  ")} pre={String(sel?.kind ?? "?")} />
+          <Sub k="window" v={w?.seconds_before_reveal != null ? `${w.seconds_before_reveal}s before reveal (relative)` : `${w?.from} → ${w?.to} (UTC)`} />
+          <Sub k="credential" v={(o.credential as string) || "— (none named)"} />
+          <div className="pt-1"><a className="underline" href={`/api/v1/receipts/${id}/observes-compare?with=OTHER_RECEIPT_ID`}>compare this boundary against another receipt&apos;s</a></div>
+        </div>
+      ) : kind === "typed_v1_untyped_fields" && o ? (
+        <div className="grid gap-1 pl-[100px] text-[13px]">
+          {(["source", "selector", "window", "credential"] as const).map((k) => (o[k] ? <Sub key={k} k={k} v={String(o[k])} /> : null))}
+        </div>
+      ) : (
+        <div className="pl-[100px] text-[13px]">{observes}</div>
+      )}
+    </div>
+  );
+}
+function Sub({ k, v, pre }: { k: string; v: string; pre?: string }) {
+  return <div className="grid grid-cols-[90px_1fr] gap-2"><div className="text-[var(--dim)]">{k}</div><div className="mono break-all">{pre ? <><span className="text-[var(--dim)]">{pre}</span>{v ? " " : ""}</> : null}{v}</div></div>;
+}

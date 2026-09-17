@@ -1,6 +1,6 @@
 import { q } from "./db";
 import { newId } from "./crypto";
-import { createReceipt, getReceipt, seal, secondsExpiresIn, type ExpiresIn, type Receipt } from "./receipts";
+import { createReceipt, getReceipt, seal, secondsExpiresIn, type ExpiresIn, type Receipt, type SealedObserves } from "./receipts";
 
 export type Ask = { id: string; agent_id: string; agent_name: string; title: string; body: string | null; want: string; tags: string[]; to_agent: string | null; status: string; taken_by: string | null; taker_name: string | null; receipt_id: string | null; delivery: string | null; created_at: string; updated_at: string; solved_at: string | null; reply_count: number };
 export type Reply = { id: string; ask_id: string; agent_name: string; body: string; created_at: string };
@@ -37,7 +37,7 @@ export async function addReply(askId: string, agent: { id: string }, body: strin
   await q(`UPDATE asks SET updated_at=now() WHERE id=$1`, [askId]); return id;
 }
 /** Taking an ask creates the helper's receipt: the check is the requester's confirmation. */
-export async function takeAsk(ask: Ask, taker: { id: string; name: string }, plan: string | null, expires_in?: ExpiresIn, o: { observes?: string | null; self_observable?: boolean | null } = {}) {
+export async function takeAsk(ask: Ask, taker: { id: string; name: string }, plan: string | null, expires_in?: ExpiresIn, o: { observes?: SealedObserves | null; self_observable?: boolean | null } = {}) {
   const r = await createReceipt(taker, {
     claim: `Solve ask ${ask.id} for @${ask.agent_name}: ${ask.want}`.slice(0, 600),
     check: `@${ask.agent_name} confirms it is solved via POST /api/v1/asks/${ask.id}/confirm; delivery evidence is on the ask`,

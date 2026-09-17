@@ -1,4 +1,5 @@
 import { createHash, createPrivateKey, createPublicKey, randomBytes, sign, verify, type KeyObject } from "node:crypto";
+import { observesKind, type ObservesKind } from "./observes";
 
 export const sha256 = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 
@@ -41,10 +42,13 @@ export function publicKey() {
   };
 }
 
-/** The coverage boundary a check actually sees, in the one form that gets sealed.
- *  A string is its own canonical form (trimmed). The typed tuple canonicalises to compact JSON with
+/** The coverage boundary a check actually sees, in the one form that gets sealed — the ORIGINAL v1
+ *  encoding, kept byte-for-byte so every receipt already on the ledger still hashes the same.
+ *  A string is its own canonical form (trimmed). The v1 tuple canonicalises to compact JSON with
  *  exactly the four keys source, selector, window, credential, in that order, each a trimmed string,
- *  anything missing as "". Fixed key order is what lets a stranger recompute the hash offline. */
+ *  anything missing as "". Fixed key order is what lets a stranger recompute the hash offline.
+ *  Its fields are prose, so it is labelled `typed_v1_untyped_fields`; the comparable shape is
+ *  typed_v2, in lib/observes.ts. */
 export type ObservesTuple = { source?: string; selector?: string; window?: string; credential?: string };
 export const OBSERVES_KEYS = ["source", "selector", "window", "credential"] as const;
 export const canonicalObserves = (o: string | ObservesTuple): string =>
@@ -58,17 +62,27 @@ export function observesCredential(observes: string | null | undefined): string 
   try { const o = JSON.parse(t) as ObservesTuple; return typeof o?.credential === "string" && o.credential.trim() ? o.credential.trim() : null; } catch { return null; }
 }
 
-/** Canonical preimages. Anyone can recompute these offline. */
-export const commitPreimage = (a: { agent: string; claim: string; check: string; committed_at: string; nonce: string; confidence?: number | null; observes?: string | null }) =>
+/** The shape of a sealed observes, for choosing a preimage version. `observes_kind` is the stored
+ *  column where a receipt has one; where it does not, the kind derives from the sealed string itself
+ *  (no pre-v2 receipt can derive as typed_v2, so no sealed receipt changes version). */
+export type Sealed = { confidence?: number | null; observes?: string | null; observes_kind?: ObservesKind | null };
+const effectiveKind = (a: Sealed): ObservesKind | null => (a.observes ? (a.observes_kind ?? observesKind(a.observes)) : null);
+
+/** Canonical preimages. Anyone can recompute these offline.
+ *  v4 differs from v3 only in the version tag: the typed_v2 canonical form is already deterministic
+ *  (sorted keys, UTC-normalised timestamps), so the tag is what tells a reader that the observes line
+ *  is a structure it can compare rather than a sentence it can only re-read. */
+export const commitPreimage = (a: { agent: string; claim: string; check: string; committed_at: string; nonce: string } & Sealed) =>
   a.observes
-    ? ["kept-commit-v3", a.agent, a.claim, a.check, a.observes, a.confidence == null ? "" : String(a.confidence), a.committed_at, a.nonce].join("\n")
+    ? [effectiveKind(a) === "typed_v2" ? "kept-commit-v4" : "kept-commit-v3", a.agent, a.claim, a.check, a.observes, a.confidence == null ? "" : String(a.confidence), a.committed_at, a.nonce].join("\n")
     : a.confidence == null
       ? ["kept-commit-v1", a.agent, a.claim, a.check, a.committed_at, a.nonce].join("\n")
       : ["kept-commit-v2", a.agent, a.claim, a.check, String(a.confidence), a.committed_at, a.nonce].join("\n");
-/** Which preimage version sealed a given receipt. v3 is used only when observes is present, so every
- *  receipt committed before observes existed still verifies under v1/v2 exactly as it did. */
-export const commitPreimageVersion = (a: { confidence?: number | null; observes?: string | null }) =>
-  a.observes ? "kept-commit-v3" : a.confidence == null ? "kept-commit-v1" : "kept-commit-v2";
+/** Which preimage version sealed a given receipt. v3 is used only when observes is present and v4 only
+ *  when that observes is typed_v2, so every receipt committed before observes existed still verifies
+ *  under v1/v2 exactly as it did, and every prose or typed_v1 receipt still verifies under v3. */
+export const commitPreimageVersion = (a: Sealed) =>
+  a.observes ? (effectiveKind(a) === "typed_v2" ? "kept-commit-v4" : "kept-commit-v3") : a.confidence == null ? "kept-commit-v1" : "kept-commit-v2";
 /** evidence_raw is the exact JSON text stored (JSON.stringify of what the agent sent), or null. */
 export const evidencePreimage = (outcome: string | null, evidence_raw: string | null) =>
   ["kept-evidence-v1", outcome ?? "", evidence_raw ?? ""].join("\n");

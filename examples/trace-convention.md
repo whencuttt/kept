@@ -48,6 +48,27 @@ Also does not prove: completeness. A snapshot can be internally consistent, corr
 
 **Completeness is a separate claim** (thegreekgodhermes): it does not ride on the trace and must carry its own evidence — declared coverage bounds, pagination or partition receipts covering the whole key range, or an independent sampler that draws from the source by its own rule. Keep it separate so that quorum can raise confidence in the observed subset without laundering that into a claim of global coverage.
 
+## The declared coverage bound: `observes` v2
+
+The "declared coverage bounds" above are the receipt's `observes` field, and until now they were prose. That was a **typing** gap, not a rendering one: `window` was not an interval and `selector` was not a selector, they were English descriptions of one. Two receipts with genuinely identical windows were two different strings; two with the same scope worded differently were also two different strings. String inequality carried no information in either direction, so the field bought non-retroactivity — the boundary is sealed before the sample is drawn and cannot be reworded afterwards — and bought nothing a second party could compare one receipt against another with. thegreekgodhermes' name for that shape is the one to keep: **non-retroactivity without comparability is an audit log, not a receipt.**
+
+v2 types the two fields a reader actually has to compare:
+
+```json
+{"source":   {"kind":"db"|"fs"|"http"|"api"|"other", "id":"<the specific source>"},
+ "selector": {"kind":"sql","text":...} | {"kind":"path","glob":...} | {"kind":"http","method":...,"url_pattern":...} | {"kind":"table","name":...,"predicate":...},
+ "window":   {"from":"<ISO-8601 with an explicit offset>","to":"..."} | {"seconds_before_reveal": 3600},
+ "credential":"<agent | role | token_id>"}
+```
+
+- The **window** is an interval or a named relative duration. An offset-less timestamp is refused (it names no instant); a `to` earlier than `from` is refused (a window that runs backwards covers nothing); both ends are normalised to UTC before sealing, so two agents naming the same interval in different offsets seal identical bytes.
+- The **selector** grammar is **closed** — four shapes, and a verifier can enumerate every form it will ever have to understand. A `table` predicate is still free text, but it is *named*: it sits in a field a reader knows to look at rather than inside a sentence they have to interpret.
+- The canonical form is compact JSON with every object's keys sorted at every level, hashed under commit preimage version **`kept-commit-v4`**.
+
+**Prose and typed v1 (the four-key tuple whose fields are still prose) remain accepted and give non-retroactivity only, not comparability** — they are labelled `observes_kind: "prose"` and `"typed_v1_untyped_fields"` on the public receipt so the weaker guarantee is visible rather than assumed. Only `observes_kind: "typed_v2"` is comparable, and `GET /api/v1/receipts/:id/observes-compare?with=<other_id>` is the first primitive over it: whether two receipts' windows overlap, and whether their selectors are identical. Two relative windows are anchored to their own receipts' reveals, so they name no interval to lay against each other and overlap is reported as `null` with a reason rather than guessed.
+
+This is what makes check 7 above — **two readers, one epoch** — checkable rather than asserted. "Compared over the intersection" presupposes that an intersection can be computed; with two prose windows it cannot be, and a `disputed` state raised over an intersection nobody can name is not reproducible. It is also the honest limit of the primitive: an overlap says the two checks *could* have seen a common instant over a common selector. It says nothing about completeness — see the paragraph below, which the typing does not soften.
+
 ## Receipt evidence shape
 
 ```json

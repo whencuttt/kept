@@ -1,9 +1,10 @@
 import { q } from "./db";
 import { canonicalObserves, commitPreimage, commitPreimageVersion, evidencePreimage, newId, newNonce, observesCredential, sealPreimage, sha256, signHex, type ObservesTuple } from "./crypto";
+import { canonicalObservesV2, ISO_INSTANT, ISO_NO_OFFSET, MAX_OBSERVES_V2, observesKind, observesParsed, parseObservesV2, type ObservesKind } from "./observes";
 
 export type Receipt = {
   id: string; agent_id: string; agent_name: string; claim: string; check: string; tags: string[]; nonce: string;
-  confidence: number | null; self_controlled: boolean; observes: string | null; /** true | false | null = the agent never declared it. A default is not a declaration. */ self_observable: boolean | null; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
+  confidence: number | null; self_controlled: boolean; observes: string | null; /** how the boundary was expressed: prose | typed_v1_untyped_fields | typed_v2. Decides the commit preimage version. */ observes_kind: ObservesKind | null; /** true | false | null = the agent never declared it. A default is not a declaration. */ self_observable: boolean | null; committed_at: string; expires_at: string; commit_hash: string; commit_sig: string; status: string;
   outcome: string | null; evidence: unknown; evidence_raw: string | null; evidence_hash: string | null; revealed_at: string | null;
   seq: number | null; prev_seal: string | null; seal_hash: string | null; seal_sig: string | null;
 };
@@ -13,7 +14,7 @@ const iso = (d: unknown) => (d instanceof Date ? d.toISOString() : d == null ? n
 function norm(r: Record<string, unknown>): Receipt {
   const raw = (r.evidence as string | null) ?? null;
   let parsed: unknown = null; if (raw != null) { try { parsed = JSON.parse(raw); } catch { parsed = raw; } }
-  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, observes: (r.observes as string | null) ?? null, self_observable: r.self_observable == null ? null : r.self_observable === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
+  return { ...(r as Receipt), confidence: r.confidence == null ? null : Number(r.confidence), self_controlled: r.self_controlled === true, observes: (r.observes as string | null) ?? null, observes_kind: ((r.observes_kind as ObservesKind | null) ?? observesKind((r.observes as string | null) ?? null)), self_observable: r.self_observable == null ? null : r.self_observable === true, evidence: parsed, evidence_raw: raw, committed_at: iso(r.committed_at)!, expires_at: iso(r.expires_at)!, revealed_at: iso(r.revealed_at), seq: r.seq == null ? null : Number(r.seq) };
 }
 
 export const MAX_TEXT = 600;
@@ -36,11 +37,8 @@ export const EXPIRES_IN_UNIT = `expires_in is a duration in SECONDS (min 60, max
 export type ExpiresIn = { kind: "seconds"; seconds: number } | { kind: "instant"; atMs: number };
 export const secondsExpiresIn = (seconds: number): ExpiresIn => ({ kind: "seconds", seconds });
 
-/** A fully-qualified ISO-8601 instant: date, time, and an EXPLICIT offset (Z, +HH:MM or +HHMM). */
-const ISO_INSTANT = /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?(Z|z|[+-]\d{2}:\d{2}|[+-]\d{4})$/;
-/** ISO-8601-shaped but with no offset at all — a local wall-clock reading, not an instant. Matched
- *  separately only so the 400 can say what is missing instead of "not a date". */
-const ISO_NO_OFFSET = /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)?$/;
+/** ISO_INSTANT and ISO_NO_OFFSET live in ./observes: one definition, used by both the sealed expiry
+ *  and the sealed observes window, so the two can never drift into accepting different strings. */
 
 /** Parse the caller's expires_in. Returns a duration or an absolute instant, or `default`.
  *  Rejects rather than substitutes: this value becomes a sealed deadline the agent cannot amend,
@@ -87,21 +85,45 @@ export function parseExpiresIn(v: unknown): { ok: true; value: ExpiresIn | undef
   return { ok: false, error: `expires_in must be a number of seconds or a fully-qualified ISO-8601 string. ${EXPIRES_IN_UNIT}` };
 }
 
-/** observes: the coverage boundary the check actually sees. Accepted either as a plain sentence or as
- *  the typed tuple {source, selector, window, credential}; both canonicalise to one string, and that one
- *  string is what is sealed. Bounds are on the canonical form, so what is hashed is what was measured. */
+/** observes: the coverage boundary the check actually sees. Three accepted shapes, one sealed string.
+ *
+ *  - a plain sentence                       -> observes_kind "prose"
+ *  - the v1 tuple of four PROSE strings     -> observes_kind "typed_v1_untyped_fields"
+ *  - the typed v2 object (lib/observes.ts)  -> observes_kind "typed_v2", sealed under kept-commit-v4
+ *
+ *  All three are non-retroactive: the boundary is fixed before the sample is drawn and cannot be
+ *  widened afterwards. Only typed_v2 is COMPARABLE — its window is an interval and its selector is a
+ *  selector, so two receipts can be laid against each other. The first two are labelled rather than
+ *  refused, and the label is the honest part: a reader can see at a glance which guarantee they get.
+ *  Bounds are on the canonical form, so what is hashed is what was measured. */
 export const MIN_OBSERVES = 8, MAX_OBSERVES = 600;
-export type ObservesResult = { ok: true; value: string | null } | { ok: false; error: string };
+/** What gets sealed: the canonical string plus the shape it was expressed in. */
+export type SealedObserves = { canonical: string; kind: ObservesKind };
+export type ObservesResult = { ok: true; value: SealedObserves | null } | { ok: false; error: string };
 export function parseObserves(raw: unknown): ObservesResult {
   if (raw == null || raw === "") return { ok: true, value: null };
   if (typeof raw === "string") {
     const v = raw.trim();
     if (v.length < MIN_OBSERVES) return { ok: false, error: `observes: name the coverage boundary the check actually sees (${MIN_OBSERVES}+ chars), e.g. "rows in listings visible to the job's own DB role, at the moment of the after-snapshot"` };
     if (v.length > MAX_OBSERVES) return { ok: false, error: `observes must be <= ${MAX_OBSERVES} chars` };
-    return { ok: true, value: v };
+    // A sentence that happens to BE a canonical typed_v2 object is that object; the kind is read off
+    // the sealed bytes so a stranger offline reaches the same answer the ledger did.
+    return { ok: true, value: { canonical: v, kind: observesKind(v) ?? "prose" } };
   }
-  if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "observes: a string, or an object with source, selector, window, credential" };
+  if (typeof raw !== "object" || Array.isArray(raw)) return { ok: false, error: "observes: a string, the v1 tuple {source, selector, window, credential} of strings, or the typed v2 object" };
   const o = raw as Record<string, unknown>;
+  // Which grammar the caller meant. Any structured member means v2, and v2 errors are precise about
+  // the grammar; four strings stay on the v1 path, byte-identical to what it always sealed.
+  const structured = (["source", "selector", "window"] as const).some((k) => o[k] != null && typeof o[k] === "object");
+  if (structured) {
+    const v2 = parseObservesV2(o);
+    if (!v2.ok) return v2;
+    const canonical = canonicalObservesV2(v2.value);
+    if (canonical.length > MAX_OBSERVES_V2) return { ok: false, error: `observes: canonical form must be <= ${MAX_OBSERVES_V2} chars (it is ${canonical.length})` };
+    // No character-count floor here: the closed grammar already guarantees a source kind and id, a
+    // selector of a known shape with its required fields, and a window. A v2 boundary cannot be thin.
+    return { ok: true, value: { canonical, kind: "typed_v2" } };
+  }
   const extra = Object.keys(o).filter((k) => !(["source", "selector", "window", "credential"] as string[]).includes(k));
   if (extra.length) return { ok: false, error: `observes: only source, selector, window, credential are sealed; remove ${extra.join(", ")}` };
   for (const k of Object.keys(o)) if (o[k] != null && typeof o[k] !== "string") return { ok: false, error: `observes.${k} must be a string` };
@@ -111,7 +133,7 @@ export function parseObserves(raw: unknown): ObservesResult {
   const content = (["source", "selector", "window", "credential"] as const).map((k) => String(t[k] ?? "").trim()).join("").length;
   if (content < MIN_OBSERVES) return { ok: false, error: `observes: too thin to be a boundary (${MIN_OBSERVES}+ chars across its fields)` };
   if (value.length > MAX_OBSERVES) return { ok: false, error: `observes: canonical form must be <= ${MAX_OBSERVES} chars (it is ${value.length})` };
-  return { ok: true, value };
+  return { ok: true, value: { canonical: value, kind: "typed_v1_untyped_fields" } };
 }
 
 /** A credential that is the receipt's own agent, or a word meaning "me". */
@@ -148,7 +170,7 @@ export function selfObservable(r: Receipt): { self_observable: boolean; reason: 
   return { self_observable: false, reason: null };
 }
 
-export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: ExpiresIn; tags?: string[]; confidence?: number; self_controlled?: boolean; observes?: string | null; /** true, false, or null/undefined for "the agent did not say" — stored as NULL, never coerced to false. */ self_observable?: boolean | null }) {
+export async function createReceipt(agent: { id: string; name: string }, input: { claim: string; check: string; expires_in?: ExpiresIn; tags?: string[]; confidence?: number; self_controlled?: boolean; /** validated by parseObserves: the canonical string AND the shape it was expressed in, because the shape chooses the commit preimage version. */ observes?: SealedObserves | null; /** true, false, or null/undefined for "the agent did not say" — stored as NULL, never coerced to false. */ self_observable?: boolean | null }) {
   // ONE clock read for both sealed timestamps: a second Date.now() below used to add its own drift
   // on top of the truncation, so expires_at was neither the instant asked for nor committed_at + ttl.
   const now = new Date();
@@ -166,16 +188,19 @@ export async function createReceipt(agent: { id: string; name: string }, input: 
   const nonce = newNonce();
   const confidence = typeof input.confidence === "number" && input.confidence >= 0 && input.confidence <= 1 ? clampPrior(input.confidence) : null;
   const self_controlled = input.self_controlled === true;
-  const observes = input.observes ?? null;
+  const observes = input.observes?.canonical ?? null;
+  // Stored, not re-derived at read time: the preimage version a receipt was sealed under is a fact
+  // about that receipt, and a later change to the canonicaliser must not be able to reclassify it.
+  const observes_kind = input.observes?.kind ?? null;
   // Absence is NULL, not false: the ledger must not record a declaration the agent never made.
   const self_observable = input.self_observable == null ? null : input.self_observable === true;
-  const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence, observes }));
+  const commit_hash = sha256(commitPreimage({ agent: agent.name, claim: input.claim, check: input.check, committed_at, nonce, confidence, observes, observes_kind }));
   const commit_sig = signHex(commit_hash);
   const tags = (input.tags ?? []).map((t) => String(t).toLowerCase().slice(0, 32)).slice(0, 8);
   await q(
-    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled, observes, self_observable)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled, observes, self_observable],
+    `INSERT INTO receipts (id, agent_id, claim, "check", tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled, observes, observes_kind, self_observable)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+    [id, agent.id, input.claim, input.check, tags, nonce, committed_at, expires_at, commit_hash, commit_sig, confidence, self_controlled, observes, observes_kind, self_observable],
   );
   return getReceipt(id);
 }
@@ -282,7 +307,15 @@ export async function leaderboard(limit = 10) {
 }
 export const publicReceipt = (r: Receipt, base: string) => ({
   id: r.id, url: `${base}/r/${r.id}`, agent: r.agent_name, agent_url: `${base}/a/${r.agent_name}`,
-  claim: r.claim, check: r.check, observes: r.observes, observes_state: coverageState(r).observes, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled,
+  claim: r.claim, check: r.check,
+  // `observes` is the sealed string, byte for byte — it is what the commit hash covers.
+  // `observes_kind` says which grammar it is in, and `observes_parsed` is that same string as an
+  // object so a reader never has to parse it (null for prose, which has no structure to expose).
+  // Only typed_v2 is comparable; prose and typed_v1_untyped_fields give non-retroactivity alone.
+  observes: r.observes, observes_kind: r.observes_kind, observes_parsed: observesParsed(r.observes, r.observes_kind),
+  observes_comparable: r.observes_kind === "typed_v2",
+  observes_compare_url: r.observes_kind === "typed_v2" ? `${base}/api/v1/receipts/${r.id}/observes-compare?with=OTHER_RECEIPT_ID` : null,
+  observes_state: coverageState(r).observes, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled,
   // `self_observable` is the DERIVED effective value a gate acts on; `self_observable_declared` is what
   // the agent actually said — "undeclared" when it said nothing, never a default rendered as a claim.
   self_observable: selfObservable(r).self_observable, self_observable_declared: coverageState(r).self_observable, self_observable_reason: selfObservable(r).reason, status: r.status, committed_at: r.committed_at, expires_at: r.expires_at,

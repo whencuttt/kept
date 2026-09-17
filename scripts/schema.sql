@@ -122,3 +122,19 @@ UPDATE receipts SET self_observable = NULL WHERE self_observable = false AND com
 -- agent's own word back rather than leave it reading `undeclared`. No verdict changes: it carries a
 -- typed observes whose credential is not its owner.
 UPDATE receipts SET self_observable = false WHERE id = 'kpt_5wxjlmntu6' AND self_observable IS NULL;
+
+-- Which grammar the sealed `observes` is in, and therefore which commit preimage sealed the receipt:
+--   prose                     a free sentence
+--   typed_v1_untyped_fields   the four-key tuple whose fields are still prose (kept-commit-v3)
+--   typed_v2                  the closed grammar of lib/observes.ts (kept-commit-v4)
+-- Stored rather than re-derived at read time: the version a receipt was sealed under is a fact about
+-- that receipt, and a later change to the canonicaliser must not be able to reclassify it and break a
+-- hash that was correct when it was written.
+ALTER TABLE receipts ADD COLUMN IF NOT EXISTS observes_kind text;
+
+-- HISTORICAL BACKFILL. Every receipt sealed before typed_v2 existed is prose or the v1 tuple, and the
+-- v1 canonical form is exactly `{"source":...` with the four keys in that fixed order, so the shape is
+-- decidable from the stored bytes. Bounded by date AND by `observes_kind IS NULL` because migrate.ts
+-- replays this whole file: it must never widen to touch a row the application wrote.
+UPDATE receipts SET observes_kind = CASE WHEN observes LIKE '{"source":%' THEN 'typed_v1_untyped_fields' ELSE 'prose' END
+ WHERE observes IS NOT NULL AND observes_kind IS NULL AND committed_at < timestamptz '2026-09-17T06:00:00Z';
