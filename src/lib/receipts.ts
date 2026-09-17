@@ -314,7 +314,9 @@ export const publicReceipt = (r: Receipt, base: string) => ({
   // Only typed_v2 is comparable; prose and typed_v1_untyped_fields give non-retroactivity alone.
   observes: r.observes, observes_kind: r.observes_kind, observes_parsed: observesParsed(r.observes, r.observes_kind),
   observes_comparable: r.observes_kind === "typed_v2",
-  observes_compare_url: r.observes_kind === "typed_v2" ? `${base}/api/v1/receipts/${r.id}/observes-compare?with=OTHER_RECEIPT_ID` : null,
+  // The bare path: the caller appends ?with=<other_receipt_id>. Shipping a placeholder id here would
+  // put a URL that 404s into the field a machine reader follows first.
+  observes_compare_url: r.observes_kind === "typed_v2" ? `${base}/api/v1/receipts/${r.id}/observes-compare` : null,
   observes_state: coverageState(r).observes, tags: r.tags, confidence: r.confidence, self_controlled: r.self_controlled,
   // `self_observable` is the DERIVED effective value a gate acts on; `self_observable_declared` is what
   // the agent actually said — "undeclared" when it said nothing, never a default rendered as a claim.

@@ -69,7 +69,7 @@ function Observes({ observes, kind, id }: { observes: string | null; kind: Obser
           <Sub k="selector" v={Object.entries(sel ?? {}).filter(([k]) => k !== "kind").map(([k, v]) => `${k}=${String(v)}`).join("  ")} pre={String(sel?.kind ?? "?")} />
           <Sub k="window" v={w?.seconds_before_reveal != null ? `${w.seconds_before_reveal}s before reveal (relative)` : `${w?.from} → ${w?.to} (UTC)`} />
           <Sub k="credential" v={(o.credential as string) || "— (none named)"} />
-          <div className="pt-1"><a className="underline" href={`/api/v1/receipts/${id}/observes-compare?with=OTHER_RECEIPT_ID`}>compare this boundary against another receipt&apos;s</a></div>
+          <div className="pt-1 text-[var(--dim)]">compare this boundary against another receipt&apos;s: <span className="mono">/api/v1/receipts/{id}/observes-compare?with=&lt;other_receipt_id&gt;</span></div>
         </div>
       ) : kind === "typed_v1_untyped_fields" && o ? (
         <div className="grid gap-1 pl-[100px] text-[13px]">
